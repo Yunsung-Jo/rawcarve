@@ -25,6 +25,7 @@ rawcarve/
 │   └── models.py         # 데이터 클래스 (FileHit)
 ├── output/               # 기본 출력 디렉토리 (gitignore)
 │   ├── jpeg/
+│   ├── jpeg_thumbnails/  # --save-thumbnails 사용 시
 │   └── avi/
 ├── docs/
 │   └── superpowers/
@@ -87,11 +88,27 @@ class FileHit:
 
 ### extractors.py
 
-**JPEG 추출:**
-1. 오프셋부터 엔드 마커(`\xFF\xD9`) 탐색
-2. 엔드 마커 발견 시 해당 위치까지 추출
-3. 엔드 마커 없으면 최대 10 MB까지 추출 후 경고 로그 기록
-4. `--min-jpeg-size` 미만이면 무시 (기본 1,024 bytes)
+**JPEG 추출 (세그먼트 파싱 방식):**
+
+단순 `\xFF\xD9` 탐색 대신 JPEG 세그먼트 구조를 직접 파싱해 진짜 파일 끝을 찾는다.
+이렇게 해야 APP1/EXIF 내 내장 썸네일의 `\xFF\xD9`를 부모 파일의 EOI로 오판하지 않는다.
+
+파싱 절차:
+1. `\xFF\xD8` (SOI) 확인
+2. 세그먼트 루프:
+   - 마커 `\xFF\xXX` 읽기
+   - `\xFF\xD9` (EOI)이면 → 파일 끝, 여기까지 추출
+   - `\xFF\xDA` (SOS)이면 → 스캔 데이터 진입:
+     바이트 단위로 스캔, `\xFF\x00`은 이스케이프(건너뜀), `\xFF\xD0`~`\xFF\xD7`은 재시작 마커, `\xFF\xD9`가 나오면 EOI
+   - 그 외 세그먼트: 다음 2바이트를 길이(big-endian)로 읽고 `length - 2` 바이트 건너뜀
+3. 세그먼트 파싱 중 이상값(길이 = 0, 이미지 범위 초과 등) 감지 시 fallback:
+   다음 외부 JPEG/AVI 시그니처 위치를 경계로 사용하고 경고 로그 기록
+
+**썸네일 처리 (범위 기반):**
+- 세그먼트 파싱으로 부모 JPEG의 정확한 범위(offset ~ offset+size)를 확정
+- `carve.py`는 추출 완료된 파일의 범위를 누적 관리
+- 새로운 JPEG hit의 오프셋이 기존 파일 범위 안에 포함되면 내장 썸네일로 간주
+- `--save-thumbnails` 플래그가 있으면 `output/jpeg_thumbnails/` 에 저장, 없으면 건너뜀
 
 **AVI 추출:**
 1. RIFF 헤더의 chunk size 필드(오프셋 4~7 바이트, little-endian uint32) 읽기
@@ -112,21 +129,23 @@ python carve.py <image> [옵션]
 옵션:
   -o, --output DIR        출력 디렉토리 (기본: ./output)
   --max-avi-size MB       AVI 최대 크기 MB (기본: 500)
-  --min-jpeg-size BYTES   이 크기 미만 JPEG 무시 (기본: 1024)
+  --save-thumbnails       썸네일을 output/jpeg_thumbnails/ 에 저장 (기본: 건너뜀)
 ```
 
 **실행 예시:**
 ```bash
-python carve.py usb.img -o output/ --max-avi-size 200 --min-jpeg-size 2048
+python carve.py usb.img -o output/ --max-avi-size 200
+python carve.py usb.img -o output/ --save-thumbnails
 ```
 
 **출력 예시:**
 ```
 Scanning usb.img (3354.19 MB)...
-[FOUND] JPEG at 0x01A3F000 → output/jpeg/0x01A3F000.jpg (45.2 KB)
-[FOUND] AVI  at 0x03B20000 → output/avi/0x03B20000.avi (128.4 MB)
-[WARN]  JPEG at 0x0FF10000 → no end marker, saved 10 MB (may be incomplete)
-Scan complete. JPEG: 42, AVI: 3, Errors: 1
+[FOUND] JPEG      at 0x01A3F000 → output/jpeg/0x01A3F000.jpg (45.2 KB)
+[FOUND] AVI       at 0x03B20000 → output/avi/0x03B20000.avi (128.4 MB)
+[THUMB] JPEG      at 0x01A3F210 → skipped (embedded thumbnail)
+[WARN]  JPEG      at 0x0FF10000 → no end marker, saved 10 MB (may be incomplete)
+Scan complete. JPEG: 42, AVI: 3, Thumbnails: 38, Errors: 1
 ```
 
 ---
@@ -136,7 +155,8 @@ Scan complete. JPEG: 42, AVI: 3, Errors: 1
 | 상황 | 처리 방식 |
 |------|-----------|
 | 파일 추출 중 예외 발생 | 해당 오프셋 건너뜀, `output/errors.log`에 기록 |
-| JPEG 엔드 마커 없음 | 최대 10 MB 추출 후 경고 로그 |
+| JPEG 세그먼트 파싱 실패 (이상 길이 등) | 다음 외부 시그니처까지 fallback, 경고 로그 |
+| JPEG EOI 없음 (fallback도 실패) | 최대 10 MB 추출 후 경고 로그 |
 | AVI chunk size = 0 또는 초과 | 다음 시그니처까지 fallback |
 | AVI fallback도 `--max-avi-size` 초과 | 상한으로 잘라서 저장 |
 | 출력 디렉토리 없음 | 자동 생성 |
