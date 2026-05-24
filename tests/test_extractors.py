@@ -1,6 +1,6 @@
 import struct
 import pytest
-from carver.extractors import jpeg_end, JPEG_MAX_FALLBACK_SIZE
+from carver.extractors import jpeg_end, JPEG_MAX_FALLBACK_SIZE, avi_end, MAX_AVI_SIZE_DEFAULT
 
 
 # ── 테스트 헬퍼 ──────────────────────────────────────────────
@@ -111,3 +111,55 @@ def test_jpeg_end_scan_data_with_rst():
     end, complete = jpeg_end(data, 0)
     assert complete is True
     assert end == len(data)
+
+
+# ── avi_end 테스트 ───────────────────────────────────────────
+
+def make_avi(chunk_size: int | None = None, extra: bytes = b'') -> bytes:
+    """RIFF + chunk_size + AVI  형식의 최소 AVI 생성."""
+    payload = b'AVI ' + extra
+    if chunk_size is None:
+        chunk_size = len(payload)
+    return b'RIFF' + struct.pack('<I', chunk_size) + payload
+
+
+def test_avi_end_valid_header():
+    """RIFF chunk_size가 정상이면 헤더 기반으로 끝을 계산한다."""
+    data = make_avi()
+    end, used_header = avi_end(data, 0)
+    assert end == len(data)
+    assert used_header is True
+
+
+def test_avi_end_chunk_size_zero_uses_fallback():
+    """chunk_size가 0이면 next_sig_offset을 fallback으로 사용한다."""
+    data = make_avi(chunk_size=0) + b'\x00' * 100
+    next_sig = 50
+    end, used_header = avi_end(data, 0, next_sig_offset=next_sig)
+    assert end == next_sig
+    assert used_header is False
+
+
+def test_avi_end_chunk_size_exceeds_max_size():
+    """chunk_size가 max_size를 초과하면 fallback으로 전환한다."""
+    huge = 600 * 1024 * 1024  # 600 MB
+    data = b'RIFF' + struct.pack('<I', huge) + b'AVI ' + b'\x00' * 20
+    end, used_header = avi_end(data, 0, max_size=500 * 1024 * 1024)
+    assert used_header is False
+    assert end <= len(data)
+
+
+def test_avi_end_no_fallback_uses_max_size():
+    """next_sig도 없으면 max_size를 상한으로 잘라 저장한다."""
+    data = make_avi(chunk_size=0) + b'\x00' * 200
+    max_size = 50
+    end, used_header = avi_end(data, 0, max_size=max_size)
+    assert end <= max_size + 8  # offset(0) + 8(RIFF header) + max_size
+    assert used_header is False
+
+
+def test_avi_end_raises_on_missing_riff():
+    """RIFF 시그니처가 없으면 ValueError를 발생시킨다."""
+    data = b'\x00' * 20
+    with pytest.raises(ValueError, match='RIFF'):
+        avi_end(data, 0)

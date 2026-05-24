@@ -89,3 +89,37 @@ def jpeg_end(
     if next_sig_offset is not None:
         return next_sig_offset, False
     return min(offset + JPEG_MAX_FALLBACK_SIZE, size), False
+
+
+def avi_end(
+    data: _Data,
+    offset: int,
+    max_size: int = MAX_AVI_SIZE_DEFAULT,
+    next_sig_offset: int | None = None,
+) -> tuple[int, bool]:
+    """
+    AVI (RIFF) 파일 끝 오프셋 반환.
+
+    Returns:
+        (end_offset, used_header)
+        used_header: True면 RIFF chunk_size 기반, False면 fallback 사용
+    """
+    size = len(data)
+
+    if data[offset:offset + 4] != b'RIFF':
+        raise ValueError(f'RIFF 없음: {offset:#x}')
+
+    if offset + 8 > size:
+        fallback = next_sig_offset if next_sig_offset is not None else offset + max_size
+        return min(fallback, size), False
+
+    chunk_size = struct.unpack('<I', data[offset + 4:offset + 8])[0]
+    end_from_header = offset + 8 + chunk_size
+
+    if 0 < chunk_size <= max_size and end_from_header <= size:
+        return end_from_header, True
+
+    # Fallback: next signature 또는 max_size 상한
+    if next_sig_offset is not None:
+        return min(next_sig_offset, offset + max_size, size), False
+    return min(offset + max_size, size), False
