@@ -81,6 +81,7 @@ class FileHit:
 
 - 디스크 이미지를 `mmap.mmap`으로 매핑 (읽기 전용)
 - `bytes.find()`로 JPEG(`\xFF\xD8\xFF`) 및 AVI(`RIFF`) 시그니처를 순서대로 탐색
+- AVI는 `RIFF` 발견 후 offset+8~11이 `AVI `인지 추가 검증 (WAV 등 다른 RIFF 포맷 제외)
 - 발견된 위치마다 `FileHit`을 yield
 - tqdm 업데이트를 위해 현재 스캔 위치를 콜백으로 전달
 
