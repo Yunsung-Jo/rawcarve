@@ -1,6 +1,6 @@
 # rawcarve
 
-ddrescue 등으로 복구한 손상된 디스크 이미지(`.img`)에서 **JPEG 이미지**와 **AVI 영상** 파일을 추출하는 파일 카빙 도구.
+ddrescue 등으로 복구한 손상된 디스크 이미지(`.img`)에서 **JPEG 이미지**와 **AVI 영상** 파일을 추출하고, 손상된 JPEG를 복구하는 파일 카빙 도구.
 
 `mmap` 기반 시그니처 탐색으로 3 GB 이상의 대용량 이미지를 효율적으로 처리한다.
 
@@ -11,6 +11,7 @@ ddrescue 등으로 복구한 손상된 디스크 이미지(`.img`)에서 **JPEG 
 - **범위 기반 썸네일 감지** — 이미 추출한 파일 범위 안에 포함된 JPEG 히트는 내장 썸네일로 분류
 - **손상 대응** — 파싱 실패 시 다음 시그니처 위치를 폴백 경계로 사용; 개별 오류는 건너뛰고 계속 진행
 - **tqdm 진행률 표시** + 파일별 추출 로그
+- **JPEG 복구** — 추출된 손상 JPEG를 원인별로 진단·복구하고 `report.csv` 리포트 생성
 
 ## 설치
 
@@ -58,12 +59,52 @@ Scanning usb.img (3354.19 MB)...
 Scan complete. JPEG: 42, AVI: 3, Thumbnails: 38, Errors: 1
 ```
 
+## JPEG 복구
+
+`carve.py`로 추출한 JPEG 파일을 진단·복구한다. 손상 원인을 자동으로 분류하고 원인별 전략을 적용한다.
+
+```bash
+python recover.py output/jpeg/ -o output/jpeg_recovered/
+```
+
+### 옵션
+
+| 옵션 | 설명 | 기본값 |
+|------|------|--------|
+| `input` | 입력 디렉토리 (`output/jpeg/`) | — |
+| `-o, --output DIR` | 출력 디렉토리 | `<input>_recovered` |
+
+### 복구 전략
+
+| 진단 원인 | 전략 |
+|-----------|------|
+| `BAD_STUFF` | 스캔 데이터 내 `FF XX` → `FF 00` 바이트 교정 후 디코딩 |
+| `MARKER_BYTE_FLIP` | 헤더 마커 바이트 교정 후 동일 파이프라인 적용 |
+| `GRAY_MCU` / 기타 손상 | 강제 디코딩 + 손상 블록 보간 |
+| `FALSE_POSITIVE` / `ZERO_FILL` | 건너뜀 |
+
+### 출력
+
+복구된 파일은 출력 디렉토리에 저장되고, `report.csv`에 각 파일의 진단 결과와 처리 내역이 기록된다.
+
+| CSV 컬럼 | 설명 |
+|----------|------|
+| `filename` | 원본 파일명 |
+| `causes` | 진단된 손상 원인 (`;` 구분) |
+| `action` | 처리 결과 (`RECOVERED_PATCHED` / `RECOVERED_INTERPOLATED` / `SKIP_*` / `CLEAN` / `ERROR`) |
+| `damaged_block_pct` | 복구 전 손상 블록 비율 |
+| `recovered_block_pct` | 복구 후 손상 블록 비율 |
+| `cut_offset_kb` | 첫 번째 BAD_STUFF 위치 (KB) |
+| `image_size` | 이미지 크기 (`{w}x{h}`) |
+
 ## 출력 구조
 
 ```
 output/
 ├── jpeg/               # 추출된 JPEG 파일 (0x{오프셋}.jpg)
 ├── jpeg_thumbnails/    # 내장 썸네일 (--save-thumbnails 사용 시)
+├── jpeg_recovered/     # 복구된 JPEG 파일
+│   └── report.csv      # 진단·복구 리포트
 ├── avi/                # 추출된 AVI 파일 (0x{오프셋}.avi)
 └── errors.log          # 추출 실패 오프셋 및 오류 내역
 ```
@@ -85,16 +126,21 @@ output/
 
 ```
 rawcarve/
-├── carve.py              # CLI 진입점
+├── carve.py              # 추출 CLI 진입점
+├── recover.py            # 복구 CLI 진입점
 ├── carver/
 │   ├── models.py         # FileHit 데이터 클래스
 │   ├── extractors.py     # JPEG/AVI 파일 경계 계산
-│   └── scanner.py        # mmap 기반 시그니처 탐색
+│   ├── scanner.py        # mmap 기반 시그니처 탐색
+│   ├── diagnosis.py      # JPEG 손상 원인 진단
+│   └── recovery.py       # 손상 블록 감지·보간·복구
 ├── tests/
 │   ├── test_models.py
 │   ├── test_extractors.py
 │   ├── test_scanner.py
-│   └── test_carve.py
+│   ├── test_carve.py
+│   ├── test_diagnosis.py
+│   └── test_recovery.py
 ├── requirements.txt
 └── requirements-dev.txt
 ```
