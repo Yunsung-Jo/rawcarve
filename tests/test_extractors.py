@@ -85,3 +85,29 @@ def test_jpeg_end_raises_on_missing_soi():
     data = b'\x00' * 20
     with pytest.raises(ValueError, match='SOI'):
         jpeg_end(data, 0)
+
+
+def test_jpeg_end_with_scan_data():
+    """SOS 이후 스캔 데이터에서 stuffed byte(FF 00)를 올바르게 처리한다."""
+    # SOS 세그먼트 헤더: marker + length + 최소 헤더 내용
+    # SOS header: FF DA, length=12, 1 component, component spec, Ss, Se, Ah/Al
+    sos_header_payload = b'\x01\x01\x00\x00\x3f\x00'  # 6바이트 payload
+    sos_seg = make_app_segment(0xDA, sos_header_payload)
+    # 스캔 데이터: FF 00 (stuffed byte), 일반 데이터, FF D9 (EOI)
+    scan_data = b'\x10\x20\xff\x00\x30\x40\xff\xd9'
+    data = b'\xff\xd8' + sos_seg + scan_data
+    end, complete = jpeg_end(data, 0)
+    assert complete is True
+    assert end == len(data)
+
+
+def test_jpeg_end_scan_data_with_rst():
+    """스캔 데이터 내 RST 마커(FF D0~D7)를 건너뛰고 EOI를 찾는다."""
+    sos_header_payload = b'\x01\x01\x00\x00\x3f\x00'
+    sos_seg = make_app_segment(0xDA, sos_header_payload)
+    # 스캔 데이터: RST0(FF D0), 데이터, RST1(FF D1), 데이터, EOI
+    scan_data = b'\x10\xff\xd0\x20\xff\xd1\x30\xff\xd9'
+    data = b'\xff\xd8' + sos_seg + scan_data
+    end, complete = jpeg_end(data, 0)
+    assert complete is True
+    assert end == len(data)

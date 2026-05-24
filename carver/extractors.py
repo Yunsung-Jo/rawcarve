@@ -69,6 +69,10 @@ def jpeg_end(
         if mb == 0xD8:  # SOI mid-stream — 손상된 파일
             break
 
+        if mb == 0xFF:  # 필 바이트 (JPEG 스펙 §B.1.1.2 허용)
+            pos += 1
+            continue
+
         if mb in _MARKER_NO_LENGTH:
             pos += 2
             continue
