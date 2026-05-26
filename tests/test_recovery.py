@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PIL import Image
-from carver.recovery import detect_damaged_blocks, interpolate_damaged_blocks
+from carver.recovery import detect_damaged_blocks
 
 _RECOVER_SCRIPT = Path(__file__).parent.parent / 'recover.py'
 
@@ -40,23 +40,6 @@ def test_detect_one_damaged_block():
     assert damaged[0, 0]
     assert not damaged[0, 1]
 
-
-def test_interpolate_fills_gray_block():
-    arr = _solid()
-    arr[:8, :8] = 128
-    damaged = detect_damaged_blocks(arr)
-    result = interpolate_damaged_blocks(arr, damaged)
-    block = result[:8, :8]
-    # 보간 후 회색(128±2)이 아니어야 함
-    assert not np.all(np.abs(block.astype(int) - 128) <= 2)
-
-
-def test_interpolate_preserves_valid_blocks():
-    arr = _solid()
-    arr[:8, :8] = 128
-    damaged = detect_damaged_blocks(arr)
-    result = interpolate_damaged_blocks(arr, damaged)
-    assert np.array_equal(result[8:, 8:], arr[8:, 8:])
 
 
 from carver.recovery import _collect_violations, _patch_bad_stuff, _force_decode_arr
@@ -133,7 +116,7 @@ def test_recover_file_bad_stuff(tmp_path):
     out.mkdir()
     r = diagnose(p)
     result_path, action = recover_file(p, r, out)
-    assert action in ('RECOVERED_PATCHED', 'RECOVERED_INTERPOLATED')
+    assert action in ('RECOVERED_PATCHED', 'RECOVERED_DECODED')
     assert result_path is not None and result_path.exists()
     img = Image.open(result_path)
     assert img.size == (64, 64)
@@ -178,7 +161,7 @@ def test_recover_file_marker_flip(tmp_path):
     out.mkdir()
     r = diagnose(p)
     result_path, action = recover_file(p, r, out)
-    assert action in ('RECOVERED_PATCHED', 'RECOVERED_INTERPOLATED', 'SKIP_TOO_DAMAGED')
+    assert action in ('RECOVERED_PATCHED', 'RECOVERED_DECODED', 'SKIP_TOO_DAMAGED')
 
 
 def test_recover_cli_smoke(tmp_path):

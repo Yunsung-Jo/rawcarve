@@ -11,6 +11,24 @@ _SOF_MARKERS = frozenset([
 CANDIDATE_FIXES: dict[int, int] = {0xCB: 0xDB, 0xC3: 0xC0, 0xC5: 0xC4}
 _GRAY_MCU_PATTERN = bytes([0x01, 0x45, 0x00, 0x14, 0x50])
 _SCAN_BOUNDARY_MARKERS = frozenset([0xC4, 0xD8, 0xD9, 0xDA, 0xDB, 0xDD, 0xFE])
+_NO_LEN_BOUNDARY = frozenset([0xD8, 0xD9, 0xDA])  # SOI/EOI/SOS: 뒤에 스캔 데이터 or 길이 필드 없음
+
+
+def _is_valid_segment(data: bytes, ff_pos: int) -> bool:
+    """FF XX 위치가 유효한 JPEG 세그먼트인지 검증한다."""
+    nb = data[ff_pos + 1]
+    if nb in _NO_LEN_BOUNDARY:
+        return True
+    size = len(data)
+    if ff_pos + 4 > size:
+        return False
+    seg_len = struct.unpack('>H', data[ff_pos + 2:ff_pos + 4])[0]
+    if seg_len < 2:
+        return False
+    seg_end = ff_pos + 2 + seg_len
+    if seg_end > size:
+        return False
+    return seg_end == size or data[seg_end] == 0xFF
 
 
 def _find_scan_end(data: bytes, start: int) -> int:
@@ -35,7 +53,10 @@ def _find_scan_end(data: bytes, start: int) -> int:
         elif nb == 0x00 or (0xD0 <= nb <= 0xD7):
             pos = ff + 2
         elif nb in _SCAN_BOUNDARY_MARKERS:
-            return ff
+            if _is_valid_segment(data, ff):
+                return ff
+            else:
+                pos = ff + 2
         else:
             pos = ff + 2
     return len(data)

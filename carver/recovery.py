@@ -8,8 +8,6 @@ from carver.diagnosis import CANDIDATE_FIXES as _FIXES, DiagnosisResult, _parse_
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-_MAX_RADIUS = 16
-
 
 def detect_damaged_blocks(arr: np.ndarray) -> np.ndarray:
     """8x8 블록 단위로 libjpeg 회색 채움(128+-2) 여부를 반환한다.
@@ -28,42 +26,6 @@ def detect_damaged_blocks(arr: np.ndarray) -> np.ndarray:
     blocks = crop.reshape(bh, 8, bw, 8).astype(np.int16)
     return (np.abs(blocks - 128) <= 2).all(axis=(1, 3))
 
-
-def interpolate_damaged_blocks(arr: np.ndarray, damaged: np.ndarray) -> np.ndarray:
-    """손상 블록을 유효 이웃 블록의 거리 역수 가중 평균으로 채운다."""
-    result = arr.copy()
-    bh, bw = damaged.shape
-    is_rgb = arr.ndim == 3
-    channels = arr.shape[2] if is_rgb else 1
-
-    for by, bx in zip(*np.where(damaged)):
-        by, bx = int(by), int(bx)
-        r1, r2 = max(0, by - _MAX_RADIUS), min(bh, by + _MAX_RADIUS + 1)
-        c1, c2 = max(0, bx - _MAX_RADIUS), min(bw, bx + _MAX_RADIUS + 1)
-
-        total_w = 0.0
-        weighted = np.zeros(channels, dtype=np.float64)
-
-        for ny in range(r1, r2):
-            for nx in range(c1, c2):
-                if damaged[ny, nx]:
-                    continue
-                dist = ((ny - by) ** 2 + (nx - bx) ** 2) ** 0.5
-                if dist == 0:
-                    continue
-                w = 1.0 / dist
-                block = arr[ny * 8:(ny + 1) * 8, nx * 8:(nx + 1) * 8]
-                weighted += w * (block.mean(axis=(0, 1)) if is_rgb else [block.mean()])
-                total_w += w
-
-        if total_w > 0:
-            fill = np.clip(weighted / total_w, 0, 255).astype(np.uint8)
-            if is_rgb:
-                result[by * 8:(by + 1) * 8, bx * 8:(bx + 1) * 8] = fill
-            else:
-                result[by * 8:(by + 1) * 8, bx * 8:(bx + 1) * 8] = fill[0]
-
-    return result
 
 
 def _collect_violations(data: bytes, scan_ranges: list[tuple[int, int]]) -> list[int]:
@@ -113,9 +75,9 @@ def _recover_bad_stuff(
     scan_ranges: list[tuple[int, int]],
     out_path: Path,
 ) -> str:
-    """FF->00 교정 시도 후 실패 시 강제 디코딩+보간으로 폴백.
+    """FF->00 교정 시도. 실패 시 강제 디코딩으로 폴백.
 
-    Returns: RECOVERED_PATCHED | RECOVERED_INTERPOLATED | SKIP_TOO_DAMAGED
+    Returns: RECOVERED_PATCHED | RECOVERED_DECODED | SKIP_TOO_DAMAGED
     """
     if not scan_ranges:
         return 'SKIP_TOO_DAMAGED'
@@ -126,36 +88,22 @@ def _recover_bad_stuff(
         patched = _patch_bad_stuff(data, violations)
         arr = _force_decode_arr(patched)
         if arr is not None:
-            damaged = detect_damaged_blocks(arr)
-            pct = float(damaged.mean())
-            if pct < 0.90:
-                if pct >= 0.10:
-                    arr = interpolate_damaged_blocks(arr, damaged)
+            if float(detect_damaged_blocks(arr).mean()) < 0.90:
                 out_path.write_bytes(_arr_to_jpeg(arr))
                 return 'RECOVERED_PATCHED'
 
+    return _recover_force_decode(data, out_path)
+
+
+def _recover_force_decode(data: bytes, out_path: Path) -> str:
+    """강제 디코딩. GRAY_MCU / TRUNCATED_SCAN 용."""
     arr = _force_decode_arr(data)
     if arr is None:
         return 'SKIP_TOO_DAMAGED'
-    damaged = detect_damaged_blocks(arr)
-    if float(damaged.mean()) >= 0.90:
+    if float(detect_damaged_blocks(arr).mean()) >= 0.90:
         return 'SKIP_TOO_DAMAGED'
-    arr = interpolate_damaged_blocks(arr, damaged)
     out_path.write_bytes(_arr_to_jpeg(arr))
-    return 'RECOVERED_INTERPOLATED'
-
-
-def _recover_interpolate_only(data: bytes, out_path: Path) -> str:
-    """강제 디코딩 후 보간. GRAY_MCU / TRUNCATED_SCAN 용."""
-    arr = _force_decode_arr(data)
-    if arr is None:
-        return 'SKIP_TOO_DAMAGED'
-    damaged = detect_damaged_blocks(arr)
-    if float(damaged.mean()) >= 0.90:
-        return 'SKIP_TOO_DAMAGED'
-    arr = interpolate_damaged_blocks(arr, damaged)
-    out_path.write_bytes(_arr_to_jpeg(arr))
-    return 'RECOVERED_INTERPOLATED'
+    return 'RECOVERED_DECODED'
 
 
 def _recover_marker_flip(data: bytes, diagnosis: DiagnosisResult, out_path: Path) -> str:
@@ -201,7 +149,7 @@ def recover_file(
         elif 'BAD_STUFF' in causes:
             action = _recover_bad_stuff(data, diagnosis.scan_ranges, out_path)
         else:
-            action = _recover_interpolate_only(data, out_path)
+            action = _recover_force_decode(data, out_path)
     except Exception:
         return None, 'ERROR'
 

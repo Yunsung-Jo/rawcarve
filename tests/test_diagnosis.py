@@ -113,8 +113,10 @@ from carver.diagnosis import _find_scan_end
 
 
 def test_find_scan_end_stops_at_sda():
-    # FF 00 FF 00 FF DA ... 구조에서 FF DA 위치를 반환해야 한다
-    data = bytes([0xFF, 0x00, 0xFF, 0x00, 0xFF, 0xDA, 0x00, 0x0C])
+    # 유효한 SOS 앞에서 스캔이 멈춰야 한다
+    # FF DA 00 04 AB CD FF: length=4, 2바이트 payload, 뒤에 FF
+    sos = bytes([0xFF, 0xDA, 0x00, 0x04, 0xAB, 0xCD, 0xFF])
+    data = bytes([0xFF, 0x00, 0xFF, 0x00]) + sos
     assert _find_scan_end(data, 0) == 4
 
 
@@ -131,8 +133,9 @@ def test_find_scan_end_no_boundary():
 
 
 def test_find_scan_end_rst_continues():
-    # FF D5 (RST5)는 스캔 데이터의 일부이므로 계속 진행해야 한다
-    data = bytes([0xFF, 0xD5, 0xFF, 0xDA])
+    # FF D5 (RST5)는 계속 진행, 이후 유효한 FF DA에서 멈춰야 한다
+    sos = bytes([0xFF, 0xDA, 0x00, 0x04, 0xAB, 0xCD, 0xFF])
+    data = bytes([0xFF, 0xD5]) + sos
     assert _find_scan_end(data, 0) == 2
 
 
@@ -183,3 +186,66 @@ def test_diagnose_progressive_scan_boundary_not_bad_stuff(tmp_path):
     r = diagnose(p)
     assert 'BAD_STUFF' not in r.causes
     assert r.causes == ['CLEAN']
+
+
+from carver.diagnosis import _is_valid_segment
+
+
+def test_is_valid_segment_valid():
+    # FF C4 00 04 AB CD FF DA — length=4, 2바이트 페이로드, 뒤에 FF
+    data = bytes([0xFF, 0xC4, 0x00, 0x04, 0xAB, 0xCD, 0xFF, 0xDA])
+    assert _is_valid_segment(data, 0) is True
+
+
+def test_is_valid_segment_length_too_small():
+    # length=1 은 유효하지 않다 (< 2)
+    data = bytes([0xFF, 0xC4, 0x00, 0x01, 0xAB, 0xFF, 0xDA])
+    assert _is_valid_segment(data, 0) is False
+
+
+def test_is_valid_segment_length_exceeds_data():
+    # length=100 이지만 데이터가 너무 짧다
+    data = bytes([0xFF, 0xC4, 0x00, 0x64, 0xAB])
+    assert _is_valid_segment(data, 0) is False
+
+
+def test_is_valid_segment_not_followed_by_ff():
+    # 유효한 길이지만 세그먼트 끝 뒤가 FF가 아니다
+    data = bytes([0xFF, 0xC4, 0x00, 0x04, 0xAB, 0xCD, 0x00, 0xDA])
+    assert _is_valid_segment(data, 0) is False
+
+
+def test_is_valid_segment_at_file_end():
+    # 세그먼트 끝이 정확히 파일 끝 (seg_end == size) → 유효
+    data = bytes([0xFF, 0xC4, 0x00, 0x04, 0xAB, 0xCD])
+    assert _is_valid_segment(data, 0) is True
+
+
+def test_is_valid_segment_too_short_for_length_field():
+    # ff_pos + 4 > size → 길이 필드를 읽을 수 없다
+    data = bytes([0xFF, 0xC4, 0x00])
+    assert _is_valid_segment(data, 0) is False
+
+
+def test_is_valid_segment_eoi_no_length():
+    # EOI (FF D9)는 길이 필드 없이 항상 유효
+    data = bytes([0xFF, 0xD9])
+    assert _is_valid_segment(data, 0) is True
+
+
+def test_is_valid_segment_soi_no_length():
+    # SOI (FF D8)는 길이 필드 없이 항상 유효
+    data = bytes([0xFF, 0xD8])
+    assert _is_valid_segment(data, 0) is True
+
+
+def test_find_scan_end_fake_boundary_not_stopped():
+    # FF C4 with length=1 (invalid) → 경계 아님, 이후 FF D9에서 멈춘다
+    data = bytes([0xFF, 0xC4, 0x00, 0x01, 0xFF, 0xD9])
+    assert _find_scan_end(data, 0) == 4
+
+
+def test_find_scan_end_real_c4_is_boundary():
+    # FF C4 with length=4, 2바이트 payload, 뒤에 FF → 진짜 경계
+    data = bytes([0xFF, 0xC4, 0x00, 0x04, 0xAB, 0xCD, 0xFF, 0xDA])
+    assert _find_scan_end(data, 0) == 0

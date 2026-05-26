@@ -91,7 +91,7 @@ python recover.py output/jpeg/ -o output/jpeg_recovered/
 |----------|------|
 | `filename` | 원본 파일명 |
 | `causes` | 진단된 손상 원인 (`;` 구분) |
-| `action` | 처리 결과 (`RECOVERED_PATCHED` / `RECOVERED_INTERPOLATED` / `SKIP_*` / `CLEAN` / `ERROR`) |
+| `action` | 처리 결과 (`RECOVERED_PATCHED` / `RECOVERED_DECODED` / `SKIP_*` / `CLEAN` / `ERROR`) |
 | `damaged_block_pct` | 복구 전 손상 블록 비율 |
 | `recovered_block_pct` | 복구 후 손상 블록 비율 |
 | `cut_offset_kb` | 첫 번째 BAD_STUFF 위치 (KB) |
