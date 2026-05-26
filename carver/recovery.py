@@ -66,19 +66,19 @@ def interpolate_damaged_blocks(arr: np.ndarray, damaged: np.ndarray) -> np.ndarr
     return result
 
 
-def _collect_violations(data: bytes, scan_start: int) -> list[int]:
-    """스캔 데이터에서 FF XX (XX != 00, D0-D9) 위치 목록을 반환 (절대 오프셋)."""
+def _collect_violations(data: bytes, scan_ranges: list[tuple[int, int]]) -> list[int]:
+    """각 스캔 범위 안에서 FF XX (XX != 00, D0-D9) 위치 목록을 반환 (절대 오프셋)."""
     violations: list[int] = []
-    pos = scan_start
-    size = len(data)
-    while pos < size - 1:
-        ff = data.find(b'\xff', pos)
-        if ff == -1 or ff >= size - 1:
-            break
-        nb = data[ff + 1]
-        if nb != 0x00 and not (0xD0 <= nb <= 0xD9):
-            violations.append(ff)
-        pos = ff + 2
+    for start, end in scan_ranges:
+        pos = start
+        while pos < end - 1:
+            ff = data.find(b'\xff', pos, end)
+            if ff == -1:
+                break
+            nb = data[ff + 1]
+            if nb != 0x00 and not (0xD0 <= nb <= 0xD9):
+                violations.append(ff)
+            pos = ff + 2
     return violations
 
 
@@ -108,15 +108,19 @@ def _arr_to_jpeg(arr: np.ndarray, quality: int = 85) -> bytes:
     return buf.getvalue()
 
 
-def _recover_bad_stuff(data: bytes, scan_start: int, out_path: Path) -> str:
+def _recover_bad_stuff(
+    data: bytes,
+    scan_ranges: list[tuple[int, int]],
+    out_path: Path,
+) -> str:
     """FF->00 교정 시도 후 실패 시 강제 디코딩+보간으로 폴백.
 
     Returns: RECOVERED_PATCHED | RECOVERED_INTERPOLATED | SKIP_TOO_DAMAGED
     """
-    if scan_start == -1:
+    if not scan_ranges:
         return 'SKIP_TOO_DAMAGED'
 
-    violations = _collect_violations(data, scan_start)
+    violations = _collect_violations(data, scan_ranges)
 
     if violations:
         patched = _patch_bad_stuff(data, violations)
@@ -165,8 +169,8 @@ def _recover_marker_flip(data: bytes, diagnosis: DiagnosisResult, out_path: Path
             patched[i + 1] = fix
             break
     fixed = bytes(patched)
-    new_scan = _parse_header(fixed)['scan_start']
-    return _recover_bad_stuff(fixed, new_scan, out_path)
+    new_hdr = _parse_header(fixed)
+    return _recover_bad_stuff(fixed, new_hdr['scan_ranges'], out_path)
 
 
 def recover_file(
@@ -193,9 +197,9 @@ def recover_file(
         if 'MARKER_BYTE_FLIP' in causes:
             action = _recover_marker_flip(data, diagnosis, out_path)
             if action == 'SKIP_TOO_DAMAGED' and 'BAD_STUFF' in causes:
-                action = _recover_bad_stuff(data, diagnosis.scan_start, out_path)
+                action = _recover_bad_stuff(data, diagnosis.scan_ranges, out_path)
         elif 'BAD_STUFF' in causes:
-            action = _recover_bad_stuff(data, diagnosis.scan_start, out_path)
+            action = _recover_bad_stuff(data, diagnosis.scan_ranges, out_path)
         else:
             action = _recover_interpolate_only(data, out_path)
     except Exception:

@@ -78,10 +78,12 @@ def _make_jpeg(w=64, h=64, color=None) -> bytes:
     return buf.getvalue()
 
 
-def _corrupt(data: bytes, count: int = 1) -> tuple[bytes, int]:
-    """스캔 데이터 내 FF 00 을 count개 FF EC 로 교체. (patched_data, scan_start) 반환."""
+def _corrupt(data: bytes, count: int = 1) -> tuple[bytes, list[tuple[int, int]]]:
+    """스캔 데이터 내 FF 00 을 count개 FF EC 로 교체. (patched_data, scan_ranges) 반환."""
     from carver.diagnosis import _parse_header
-    ss = _parse_header(data)['scan_start']
+    hdr = _parse_header(data)
+    scan_ranges = hdr['scan_ranges']
+    ss = hdr['scan_start']
     arr = bytearray(data)
     found = 0
     for i in range(ss, len(arr) - 1):
@@ -90,20 +92,21 @@ def _corrupt(data: bytes, count: int = 1) -> tuple[bytes, int]:
             found += 1
             if found >= count:
                 break
-    return bytes(arr), ss
+    return bytes(arr), scan_ranges
 
 
 def test_collect_violations():
-    data, ss = _corrupt(_make_jpeg(), count=3)
-    viols = _collect_violations(data, ss)
+    data, scan_ranges = _corrupt(_make_jpeg(), count=3)
+    viols = _collect_violations(data, scan_ranges)
     assert len(viols) >= 3
 
 
 def test_patch_removes_all_violations():
-    data, ss = _corrupt(_make_jpeg(), count=2)
-    viols = _collect_violations(data, ss)
+    data, scan_ranges = _corrupt(_make_jpeg(), count=2)
+    viols = _collect_violations(data, scan_ranges)
     patched = _patch_bad_stuff(data, viols)
-    assert len(_collect_violations(patched, ss)) == 0
+    new_ranges = scan_ranges
+    assert len(_collect_violations(patched, new_ranges)) == 0
 
 
 def test_force_decode_clean():
@@ -195,3 +198,41 @@ def test_recover_cli_smoke(tmp_path):
     assert len(rows) == 3
     assert all(r['action'] == 'CLEAN' for r in rows)
     assert rows[0]['filename'].endswith('.jpg')
+
+
+def _make_progressive_jpeg_recovery(w=128, h=128) -> bytes:
+    rng = np.random.default_rng(seed=9)
+    arr = rng.integers(0, 256, (w, h, 3), dtype=np.uint8)
+    img = Image.fromarray(arr, mode='RGB')
+    buf = io.BytesIO()
+    img.save(buf, format='JPEG', progressive=True, quality=85)
+    return buf.getvalue()
+
+
+def test_collect_violations_progressive_skips_scan_boundary():
+    """Progressive JPEG의 스캔 경계 FF DA는 위반으로 탐지되면 안 된다."""
+    from carver.diagnosis import _parse_header
+    data = _make_progressive_jpeg_recovery()
+    hdr = _parse_header(data)
+    scan_ranges = hdr['scan_ranges']
+    assert len(scan_ranges) >= 2
+    viols = _collect_violations(data, scan_ranges)
+    assert len(viols) == 0
+
+
+def test_collect_violations_detects_bitflip_in_scan():
+    """스캔 범위 내 FF EC 위반은 탐지되어야 한다."""
+    from carver.diagnosis import _parse_header
+    data = _make_progressive_jpeg_recovery()
+    hdr = _parse_header(data)
+    scan_ranges = hdr['scan_ranges']
+    arr = bytearray(data)
+    last_s, last_e = scan_ranges[-1]
+    for i in range(last_s, last_e - 1):
+        if arr[i] == 0xFF and arr[i + 1] == 0x00:
+            arr[i + 1] = 0xEC
+            break
+    corrupted = bytes(arr)
+    new_ranges = _parse_header(corrupted)['scan_ranges']
+    viols = _collect_violations(corrupted, new_ranges)
+    assert len(viols) >= 1

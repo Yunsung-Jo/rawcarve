@@ -107,3 +107,79 @@ def test_zero_fill(tmp_path):
     p.write_bytes(bytes(data))
     r = diagnose(p)
     assert 'ZERO_FILL' in r.causes
+
+
+from carver.diagnosis import _find_scan_end
+
+
+def test_find_scan_end_stops_at_sda():
+    # FF 00 FF 00 FF DA ... 구조에서 FF DA 위치를 반환해야 한다
+    data = bytes([0xFF, 0x00, 0xFF, 0x00, 0xFF, 0xDA, 0x00, 0x0C])
+    assert _find_scan_end(data, 0) == 4
+
+
+def test_find_scan_end_skips_violations():
+    # FF EC (위반)는 경계가 아니므로 건너뛰고, 이후 FF D9에서 종료해야 한다
+    data = bytes([0xFF, 0x00, 0xFF, 0xEC, 0xFF, 0xD9])
+    assert _find_scan_end(data, 0) == 4
+
+
+def test_find_scan_end_no_boundary():
+    # 경계 마커 없으면 len(data) 반환
+    data = bytes([0xFF, 0x00, 0xAB, 0xCD])
+    assert _find_scan_end(data, 0) == len(data)
+
+
+def test_find_scan_end_rst_continues():
+    # FF D5 (RST5)는 스캔 데이터의 일부이므로 계속 진행해야 한다
+    data = bytes([0xFF, 0xD5, 0xFF, 0xDA])
+    assert _find_scan_end(data, 0) == 2
+
+
+def _make_progressive_jpeg(w=128, h=128) -> bytes:
+    import numpy as np
+    rng = np.random.default_rng(seed=7)
+    arr = rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
+    img = Image.fromarray(arr, mode='RGB')
+    buf = io.BytesIO()
+    img.save(buf, format='JPEG', progressive=True, quality=85)
+    return buf.getvalue()
+
+
+def test_parse_header_progressive_has_scan_ranges():
+    from carver.diagnosis import _parse_header
+    data = _make_progressive_jpeg()
+    hdr = _parse_header(data)
+    # Progressive JPEG는 여러 SOS를 가진다
+    assert len(hdr['scan_ranges']) >= 2
+    # 각 범위의 start < end 이어야 한다
+    for start, end in hdr['scan_ranges']:
+        assert start < end
+    # scan_start는 여전히 첫 번째 스캔 시작을 가리켜야 한다
+    assert hdr['scan_start'] == hdr['scan_ranges'][0][0]
+
+
+def test_parse_header_baseline_has_one_scan_range():
+    from carver.diagnosis import _parse_header
+    data = _make_jpeg()  # 기존 헬퍼: baseline JPEG
+    hdr = _parse_header(data)
+    assert len(hdr['scan_ranges']) == 1
+    assert hdr['scan_ranges'][0][0] == hdr['scan_start']
+
+
+def test_diagnose_progressive_has_scan_ranges(tmp_path):
+    data = _make_progressive_jpeg()
+    p = tmp_path / 'prog.jpg'
+    p.write_bytes(data)
+    r = diagnose(p)
+    assert len(r.scan_ranges) >= 2
+
+
+def test_diagnose_progressive_scan_boundary_not_bad_stuff(tmp_path):
+    """Progressive JPEG의 스캔 경계 마커(FF DA)가 BAD_STUFF로 탐지되면 안 된다."""
+    data = _make_progressive_jpeg()
+    p = tmp_path / 'prog.jpg'
+    p.write_bytes(data)
+    r = diagnose(p)
+    assert 'BAD_STUFF' not in r.causes
+    assert r.causes == ['CLEAN']

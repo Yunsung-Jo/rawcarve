@@ -10,6 +10,35 @@ _SOF_MARKERS = frozenset([
 ])
 CANDIDATE_FIXES: dict[int, int] = {0xCB: 0xDB, 0xC3: 0xC0, 0xC5: 0xC4}
 _GRAY_MCU_PATTERN = bytes([0x01, 0x45, 0x00, 0x14, 0x50])
+_SCAN_BOUNDARY_MARKERS = frozenset([0xC4, 0xD8, 0xD9, 0xDA, 0xDB, 0xDD, 0xFE])
+
+
+def _find_scan_end(data: bytes, start: int) -> int:
+    """스캔 데이터의 끝 위치(다음 세그먼트 FF 바이트)를 반환한다.
+
+    start부터 FF XX 시퀀스를 순회한다:
+    - XX 00 또는 D0-D7: 스터핑/RST, 스캔의 일부 → 계속
+    - XX FF: fill 바이트 → 계속
+    - XX in _SCAN_BOUNDARY_MARKERS: 다음 세그먼트 → FF 위치 반환
+    - 그 외: 비트 플립 등 위반, 스캔 경계 아님 → 계속
+    경계 없으면 len(data) 반환.
+    """
+    size = len(data)
+    pos = start
+    while pos < size - 1:
+        ff = data.find(b'\xff', pos)
+        if ff == -1 or ff >= size - 1:
+            break
+        nb = data[ff + 1]
+        if nb == 0xFF:
+            pos = ff + 1
+        elif nb == 0x00 or (0xD0 <= nb <= 0xD7):
+            pos = ff + 2
+        elif nb in _SCAN_BOUNDARY_MARKERS:
+            return ff
+        else:
+            pos = ff + 2
+    return len(data)
 
 
 @dataclass
@@ -22,6 +51,7 @@ class DiagnosisResult:
     has_eoi: bool = False
     sof: tuple[int, int, int] | None = None  # (width, height, ncomp)
     broken_marker: int | None = None         # MARKER_BYTE_FLIP 대상 마커
+    scan_ranges: list[tuple[int, int]] = field(default_factory=list)
 
 
 def _parse_header(data: bytes) -> dict:
@@ -32,6 +62,7 @@ def _parse_header(data: bytes) -> dict:
     out: dict = {
         'sof': None,
         'scan_start': -1,
+        'scan_ranges': [],
         'has_eoi': False,
         'markers_seen': [],
     }
@@ -65,22 +96,18 @@ def _parse_header(data: bytes) -> dict:
             if pos + 2 > size:
                 break
             sos_len = struct.unpack('>H', data[pos:pos + 2])[0]
-            out['scan_start'] = pos + sos_len
-            # 스캔 데이터에서 EOI 탐색
-            sp = out['scan_start']
-            while sp < size - 1:
-                ff = data.find(b'\xff', sp)
-                if ff == -1 or ff >= size - 1:
-                    break
-                nb = data[ff + 1]
-                if nb == 0xD9:
-                    out['has_eoi'] = True
-                    break
-                elif nb == 0x00 or 0xD0 <= nb <= 0xD7:
-                    sp = ff + 2
-                else:
-                    sp = ff + 1
-            break
+            if sos_len < 2:
+                break
+            scan_data_start = pos + sos_len
+            if out['scan_start'] == -1:
+                out['scan_start'] = scan_data_start
+            scan_data_end = _find_scan_end(data, scan_data_start)
+            out['scan_ranges'].append((scan_data_start, scan_data_end))
+            # scan_data_end가 EOI이면 has_eoi 설정
+            if scan_data_end + 2 <= size and data[scan_data_end:scan_data_end + 2] == b'\xff\xd9':
+                out['has_eoi'] = True
+            pos = scan_data_end
+            continue
 
         if pos + 4 > size:
             break
@@ -108,6 +135,7 @@ def diagnose(path: Path) -> DiagnosisResult:
     r.scan_start = hdr['scan_start']
     r.has_eoi = hdr['has_eoi']
     r.sof = hdr['sof']
+    r.scan_ranges = hdr['scan_ranges']
 
     # Priority 1: FALSE_POSITIVE
     sof = r.sof
@@ -131,26 +159,24 @@ def diagnose(path: Path) -> DiagnosisResult:
         r.causes = ['FALSE_POSITIVE']
         return r
 
-    scan = data[r.scan_start:]
-
-    # Priority 3: BAD_STUFF
-    # 스캔 데이터 내 0xFF 다음 바이트가 0x00(스터핑) 또는 RST(0xD0-0xD7),
-    # EOI(0xD9)가 아닌 경우 손상된 스터핑 바이트로 간주한다.
-    pos = 0
-    while pos < len(scan) - 1:
-        ff = scan.find(b'\xff', pos)
-        if ff == -1 or ff >= len(scan) - 1:
-            break
-        nb = scan[ff + 1]
-        if nb != 0x00 and not (0xD0 <= nb <= 0xD9):
-            if r.first_bad_offset is None:
-                r.first_bad_offset = ff
-            if 'BAD_STUFF' not in r.causes:
-                r.causes.append('BAD_STUFF')
-        pos = ff + 2
+    # Priority 3: BAD_STUFF — 각 스캔 범위 안에서만 FF XX 위반을 탐지한다.
+    for scan_s, scan_e in r.scan_ranges:
+        pos = scan_s
+        while pos < scan_e - 1:
+            ff = data.find(b'\xff', pos, scan_e)
+            if ff == -1:
+                break
+            nb = data[ff + 1]
+            if nb != 0x00 and not (0xD0 <= nb <= 0xD9):
+                if r.first_bad_offset is None:
+                    r.first_bad_offset = ff - r.scan_start
+                if 'BAD_STUFF' not in r.causes:
+                    r.causes.append('BAD_STUFF')
+            pos = ff + 2
 
     # Priority 4: GRAY_MCU — 01 45 00 14 50 4회 이상 반복
     # 회색 MCU 블록이 반복되는 패턴은 디코딩 오류나 데이터 손상을 나타낸다.
+    scan = data[r.scan_start:]
     repeat = _GRAY_MCU_PATTERN * 4
     idx = scan.find(repeat)
     if idx != -1:
