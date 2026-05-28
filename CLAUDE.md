@@ -3,78 +3,29 @@
 ddrescue 등으로 복구한 손상된 디스크 이미지(.img)에서
 JPEG 이미지와 AVI 영상 파일을 추출하고, 손상된 JPEG를 복구하는 파일 카빙 도구.
 
-## 실행 방법
+- **carve.py** — 디스크 이미지에서 JPEG/AVI를 시그니처 기반으로 추출
+- **recover.py** — 추출된 JPEG를 진단하고 원인별 복구 전략 적용
 
-```bash
-pip install -r requirements.txt
+## 작업 규칙
 
-# 1단계: 디스크 이미지에서 JPEG/AVI 추출
-python carve.py <이미지 파일> [옵션]
-
-# 2단계: 추출된 JPEG 복구 (선택)
-python recover.py output/jpeg/ -o output/jpeg_recovered/
-```
-
-### carve.py 옵션
-
-| 옵션 | 설명 | 기본값 |
-|------|------|--------|
-| `-o, --output DIR` | 출력 디렉토리 | `./output` |
-| `--max-avi-size MB` | AVI 최대 크기 (MB) | `500` |
-| `--save-thumbnails` | 썸네일을 `jpeg_thumbnails/`에 저장 | 건너뜀 |
-
-### recover.py 옵션
-
-| 옵션 | 설명 | 기본값 |
-|------|------|--------|
-| `input` | 입력 디렉토리 | — |
-| `-o, --output DIR` | 출력 디렉토리 | `<input>_recovered` |
-
-### 예시
-
-```bash
-python carve.py usb.img -o output/
-python carve.py usb.img -o output/ --max-avi-size 200 --save-thumbnails
-python recover.py output/jpeg/ -o output/jpeg_recovered/
-```
-
-## 파일 구조
-
-```
-rawcarve/
-├── carve.py              # 추출 CLI 진입점
-├── recover.py            # 복구 CLI 진입점
-├── carver/
-│   ├── models.py         # FileHit 데이터 클래스
-│   ├── extractors.py     # JPEG/AVI 경계 계산
-│   ├── scanner.py        # 시그니처 탐색
-│   ├── diagnosis.py      # JPEG 손상 원인 진단
-│   └── recovery.py       # 손상 블록 감지·보간·복구
-├── output/               # 추출 결과 (gitignore)
-│   ├── jpeg/
-│   ├── jpeg_thumbnails/
-│   ├── jpeg_recovered/
-│   └── avi/
-└── tests/
-```
+- **main에 직접 커밋 금지.** 커밋 전 현재 브랜치가 main이면 feature 브랜치를 먼저 생성한다.
+- 브랜치명: `<타입>/<짧은-설명>` (예: `feat/avi-recovery`, `fix/jpeg-scan`)
+- 로컬 머지 시 항상 `--squash` 플래그를 사용한다.
+  (`git merge --squash <branch>` → 커밋 → `git branch -d <branch>`)
 
 ## 커밋 메시지 규칙
 
-Conventional Commits 형식, 한글로 작성:
+Conventional Commits 형식, 한글. 제목 50자 이내, 본문에 변경 이유와 맥락을 담는다.
+`Co-Authored-By` 트레일러 필수.
 
-```
-<타입>: <제목> (50자 이내)
+## 문서
 
-<본문> — 변경 이유와 맥락 서술
+@docs/README.md
 
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
-```
-
-타입: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`
-
-## 테스트 실행
-
-```bash
-pip install -r requirements-dev.txt
-python -m pytest tests/ -v
-```
+- 비자명한 기술 결정(설계 대안 선택, fallback 전략, 포맷 처리 방식 등)이 있으면 ADR을 작성한다. 결정이 확정되면 상태를 Accepted로, 기존 결정이 대체되면 Superseded로 업데이트한다.
+- `finishing-a-development-branch` 스킬을 호출하기 전에 아래 문서를 먼저 생성·업데이트한다:
+  - 영향받은 spec
+  - architecture.md
+  - README.md
+  - 필요한 ADR
+  - 필요한 레퍼런스 문서
