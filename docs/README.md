@@ -7,3 +7,4 @@
 | 스펙 | `specs/` | 프로그램 단위 동작 방식 | `specs/0000-template.md` | `specs/README.md` |
 | ADR | `adr/` | 비자명한 기술 결정 기록 | `adr/0000-template.md` | `adr/README.md` |
 | 레퍼런스 | `reference/` | 외부 포맷·스펙 지식 | `reference/0000-template.md` | `reference/README.md` |
+| 조사 기록 | `investigations/` | 분석·디버깅 과정의 시점 기록(랩 노트) | `investigations/0000-template.md` | `investigations/README.md` |

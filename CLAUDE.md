@@ -4,7 +4,7 @@ ddrescue 등으로 복구한 손상된 디스크 이미지(.img)에서
 JPEG 이미지와 AVI 영상 파일을 추출하고, 손상된 JPEG를 복구하는 파일 카빙 도구.
 
 - **carve.py** — 디스크 이미지에서 JPEG/AVI를 시그니처 기반으로 추출
-- **recover.py** — 추출된 JPEG를 진단하고 원인별 복구 전략 적용
+- **recover.py** — 추출된 손상 JPEG의 비트스트림 디싱크를 resync 엔진으로 복구
 
 ## 작업 규칙
 

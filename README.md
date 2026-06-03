@@ -40,10 +40,20 @@ python recover.py <입력 디렉토리> [옵션]
 | 옵션 | 설명 | 기본값 |
 |------|------|--------|
 | `-o, --output DIR` | 출력 디렉토리 | `<input>_recovered` |
+| `-q, --quality N` | 복구본 JPEG 품질 | `95` |
+| `-j, --jobs N` | 병렬 프로세스 수 (`0`=CPU 수, `1`=순차) | `0` |
+| `--fast` | 빠른 모드(부분 복구 감수) | 꺼짐(철저) |
+| `--time-budget SEC` | 파일당 시간 상한(초, `0`=무제한) | 철저 90 / `--fast` 20 |
 
 ```bash
-python recover.py output/jpeg/ -o output/jpeg_recovered/
+python recover.py output/jpeg/ -o output/jpeg_recovered/          # 철저(기본)
+python recover.py output/jpeg/ --fast                             # 빠르게
+python recover.py output/jpeg/ --time-budget 0                    # 무제한(밤새 실행)
 ```
+
+**철저↔속도**: 기본은 **철저 모드**(먼 구멍까지 재동기 탐색 → 복구율↑, 느림). 빠르게 보려면
+`--fast`, 더 끝까지 짜내려면 `--time-budget 0`. 손상이 심해 복구 불가한 영역은 어느 모드든
+가짜로 채우지 않고 회색으로 남긴다.
 
 ## 출력 구조
 
@@ -58,14 +68,20 @@ output/
 
 파일명의 16진수 오프셋은 디스크 이미지 내 원본 위치를 나타낸다.
 
-## 복구 전략
+## 복구 전략 (resync 엔진)
 
-| 진단 원인 | 전략 |
-|-----------|------|
-| `BAD_STUFF` | 스캔 데이터 내 `FF XX` → `FF 00` 패치 후 디코딩 |
-| `MARKER_BYTE_FLIP` | 헤더 마커 바이트 교정 후 동일 파이프라인 적용 |
-| `GRAY_MCU` / 기타 손상 | 강제 디코딩 (libjpeg truncated 허용) |
-| `FALSE_POSITIVE` / `ZERO_FILL` | 건너뜀 |
+손상된 엔트로피 스트림은 바이트 손상으로 **비트 정렬이 어긋나(디싱크)** 표준 디코더가
+회색(스캔 중단) 또는 깨진(어긋난 채 진행) 출력을 낸다. resync 엔진은 비트 단위 디코더로
+디싱크 지점을 정확히 짚고 정렬을 복원한다.
+
+| 단계 | 동작 |
+|------|------|
+| 바이트 오라클 | 손상 지점 부근 바이트를 치환/삭제/삽입해 정렬 복원 (단일바이트 손상) |
+| resync-skip | 다중바이트 손상/구멍은 재개 비트위치를 탐색해 건너뜀 |
+| 회색 유지 | 물리적으로 소실된 영역은 가짜로 채우지 않고 회색으로 남김 |
+
+색 캐스트·밝기 밴드·이미지 밀림은 복구 대상이 아니다(구조 복원에 집중).
+자세한 근거는 [ADR 0001](docs/adr/0001-resync-recovery.md), [recover 스펙](docs/specs/0002-recover.md) 참조.
 
 ## 테스트
 

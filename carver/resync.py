@@ -1,0 +1,262 @@
+"""바이트 오라클 + 세그먼트 resync 기반 JPEG 복구 엔진.
+
+손상된 baseline JPEG의 엔트로피 스트림은 바이트 손상으로 디싱크되어, 표준 디코더는
+손상 지점에서 회색(스캔 중단) 또는 깨진(어긋난 채 진행) 출력을 낸다. 이 엔진은
+`carver.jpegdecode`의 비트 단위 디코더로 디싱크 지점을 정확히 짚고, 각 지점에서:
+
+ 1) 바이트 편집(치환/삭제/삽입): 단일바이트 손상을 복구(정렬 보존, 밀림 없음).
+ 2) resync-skip: 재개 비트위치를 넓게 탐색해 다중바이트 손상/구멍을 건너뜀(밝기·밀림은
+    보류 항목). db≈0인 masking(가짜 복구)은 거부한다.
+
+좌→우로 처리하므로 편집·세그먼트는 항상 현재 지점 이후에만 일어나 이전 비트위치가 안전하다.
+복구 가능한 영역만 복구하고, 물리적으로 소실된 영역은 회색으로 남긴다(가짜 채움 금지).
+"""
+from __future__ import annotations
+import io
+import time
+from pathlib import Path
+
+import numpy as np
+
+from carver import jpegdecode as jd
+
+DC_BOUND, AC_BOUND = 1400, 6000   # 계수 dequant 오버플로 경계(디싱크 탐지)
+_ZZ = jd.ZIGZAG
+
+
+def gray_fraction(rgb: np.ndarray) -> float:
+    """평탄+무채색(디코더가 채운 회색) 픽셀 비율."""
+    a = rgb.astype(np.int16)
+    h, w, _ = a.shape
+    if h == 0 or w == 0:
+        return 1.0
+    r, g, b = a[:, :, 0], a[:, :, 1], a[:, :, 2]
+    achroma = (np.abs(r - g) < 10) & (np.abs(g - b) < 10) & (np.abs(r - b) < 10)
+    flat = np.ones((h, w), bool)
+    flat[:, :-1] &= np.abs(np.diff(a, axis=1)).sum(2) < 6
+    flat[:-1, :] &= np.abs(np.diff(a, axis=0)).sum(2) < 6
+    return float((achroma & flat).mean())
+
+
+def _probe(dec, buf, bit, mcu, dc, maxW, rate):
+    """(bit, mcu, dc)에서 디코딩이 plausible하게 이어지는 MCU 수(clean run)."""
+    return jd.decode_probe(buf, buf.size * 8, int(bit), int(dc[0]), int(dc[1]), int(dc[2]),
+                           dec.hl, dec.hs, dec.dc_idx, dec.ac_idx, dec.qmat,
+                           dec.hsamp, dec.vsamp, dec.mcus_x, dec.mcus_y, int(mcu),
+                           maxW, _ZZ, DC_BOUND, AC_BOUND, rate)[0]
+
+
+def _decode_traj(dec, buf, segments, rate, stop=True):
+    """세그먼트별로 디코드해 mb/dcr(절대 인덱스) + coef 그리드를 채운다.
+    stop=True면 각 세그먼트가 첫 디싱크에서 멈춰 mb/dcr가 frontier까지 항상 유효.
+    반환: (mb, dcr, frontier=마지막 세그먼트 정지 MCU)."""
+    total = dec.mcus_x * dec.mcus_y
+    dec.buf = buf
+    dec.nbits = buf.size * 8
+    dec.cy[:] = 0; dec.cb[:] = 0; dec.cr[:] = 0
+    mb = np.zeros(total + 1, np.int64)
+    dcr = np.zeros((total + 1, 3), np.int64)
+    dcb, acb, rt = (DC_BOUND, AC_BOUND, rate) if stop else (jd.DISABLE, jd.DISABLE, jd.DISABLE)
+    segs = sorted(segments) + [(total, 0, None)]
+    frontier = 0
+    for i in range(len(segs) - 1):
+        sm, sbit, sdc = segs[i]
+        em = segs[i + 1][0]
+        if em <= sm:
+            continue
+        done, _eb, _err = jd.decode_range(
+            buf, buf.size * 8, int(sbit), int(sdc[0]), int(sdc[1]), int(sdc[2]),
+            dec.hl, dec.hs, dec.dc_idx, dec.ac_idx, dec.qmat,
+            dec.hsamp, dec.vsamp, dec.hmax, dec.vmax, dec.mcus_x, dec.mcus_y,
+            sm, em - sm, dec.cy, dec.cb, dec.cr, mb, _ZZ, dcr, dcb, acb, rt)
+        frontier = sm + done
+        if stop and done < em - sm:
+            # 이 세그먼트가 목표 범위 전에 디싱크 → 여기가 실제 frontier(이후 세그먼트 무시)
+            break
+    return mb, dcr, frontier
+
+
+def _best_edit(dec, buf, m_d, mb, dcr, rate, back=4, win_lo=16, win_hi=6, maxW=900):
+    """디싱크 지점 부근 바이트 1개를 치환/삭제/삽입해 clean run을 최대화하는 편집 탐색.
+    반환 (kind, pos, val, run). kind: 'sub'/'del'/'ins'/None."""
+    m_s = max(0, m_d - back)
+    sb = int(mb[m_s]); sdc = dcr[m_s].copy()
+    base = _probe(dec, buf, sb, m_s, sdc, maxW, rate)
+    byte_d = int(mb[m_d]) // 8
+    lo = max(sb // 8, byte_d - win_lo)
+    hi = min(buf.size - 2, byte_d + win_hi)
+    best = (None, -1, -1, base)
+    for p in range(lo, hi + 1):                       # 치환
+        orig = int(buf[p])
+        for v in range(256):
+            if v == orig:
+                continue
+            buf[p] = v
+            r = _probe(dec, buf, sb, m_s, sdc, maxW, rate)
+            if r > best[3]:
+                best = ('sub', p, v, r)
+                if r >= maxW:
+                    buf[p] = orig
+                    return best
+        buf[p] = orig
+    for p in range(lo, hi + 1):                       # 삭제
+        r = _probe(dec, np.delete(buf, p), sb, m_s, sdc, maxW, rate)
+        if r > best[3]:
+            best = ('del', p, -1, r)
+            if r >= maxW:
+                return best
+    for p in range(lo, hi + 1):                       # 삽입
+        for v in range(256):
+            r = _probe(dec, np.insert(buf, p, v), sb, m_s, sdc, maxW, rate)
+            if r > best[3]:
+                best = ('ins', p, v, r)
+                if r >= maxW:
+                    return best
+    return best
+
+
+def _resync_skip(dec, buf, m_d, mb, dcr, rate, near=300000, full=True, maxW=900):
+    """재개 비트위치를 탐색해 손상 클러스터/구멍을 건너뛴다(DC는 직전값 캐리).
+    db≈0(masking, 가짜복구)은 거부. 반환 (resume_bit, dc, run) 또는 None.
+
+    near비트 내를 byte 정렬(8비트 간격)로 먼저 훑고, full=True면 못 찾을 때
+    남은 스트림 전체를 거칠게(64비트 간격) 훑어 더 먼 구멍도 건너뛴다(철저 모드).
+    full=False면 near까지만(빠른 모드) — 손상 심한 파일에서 비용 폭발을 막는다."""
+    base = int(mb[m_d]); dc = dcr[m_d].copy(); nbits = buf.size * 8
+    floor_bit = int(mb[m_d - 1]) + 1 if m_d > 0 else 0   # 이전 MCU를 침범하지 않는 하한
+    best = (-1, 0)
+    limit = min(nbits - base - 64, near)
+    db = max(-32, floor_bit - base)                   # 역방향은 이전 MCU 시작까지만
+    while db < limit:                                 # 1) 가까운 범위 byte정렬 스캔
+        r = _probe(dec, buf, base + db, m_d, dc, maxW, rate)
+        if r > best[1]:
+            best = (base + db, r)
+        if r >= maxW:
+            break
+        db += 8
+    if full and best[1] < maxW * 0.8:                 # 2) 남은 전체 거친 스캔(철저 모드)
+        db = limit
+        while base + db < nbits - 64:
+            r = _probe(dec, buf, base + db, m_d, dc, maxW, rate)
+            if r > best[1]:
+                best = (base + db, r)
+            if r >= maxW:
+                break
+            db += 64
+    if best[0] >= 0:                                  # 3) 최적 부근 비트정밀 보정
+        for rb in range(max(floor_bit, best[0] - 40), best[0] + 8):
+            r = _probe(dec, buf, rb, m_d, dc, maxW, rate)
+            if r > best[1]:
+                best = (rb, r)
+    if best[1] >= max(250, maxW // 2) and abs(best[0] - base) >= 24:
+        return best[0], dc.copy(), best[1]
+    return None
+
+
+def _apply_edit(buf, kind, p, v):
+    if kind == 'sub':
+        buf = buf.copy(); buf[p] = v; return buf
+    if kind == 'del':
+        return np.delete(buf, p)
+    if kind == 'ins':
+        return np.insert(buf, p, v)
+    return buf
+
+
+def recover(dec, maxW=900, max_ops=300, time_budget=90.0,
+            resync_near=300000, resync_full=True):
+    """디코더에 대해 반복 복구를 수행하고 (rgb, stats, segments)를 반환한다.
+
+    철저함↔속도 조절:
+    - resync_full=True + 큰 resync_near: 먼 구멍까지 건너뛰어 복구율↑(느림, 기본=철저).
+    - resync_full=False + 작은 resync_near: 가까운 손상만(빠름).
+    - time_budget(초): 파일당 시간 상한. None/0이면 무제한. 심손상 파일의 비용 폭발 방지용
+      안전장치(초과 시 남은 영역은 회색)."""
+    total = dec.mcus_x * dec.mcus_y
+    buf = dec.buf.copy()
+    # MCU당 비트 상한(평균의 4배): 디싱크 후 비트 폭식을 탐지
+    rate = max(350, int((buf.size * 8) / total * 4))
+    segments = [(0, 0, np.zeros(3, np.int64))]
+    n = dict(sub=0, dele=0, ins=0, resync=0, hole=0)
+    last_front = -1
+    stuck = 0
+    deadline = (time.monotonic() + time_budget) if time_budget else None
+    while sum(n.values()) < max_ops:
+        if deadline is not None and time.monotonic() > deadline:
+            break
+        mb, dcr, frontier = _decode_traj(dec, buf, segments, rate)
+        if frontier >= total - 1:
+            break
+        if frontier <= last_front:                    # 진전 없음 가드
+            stuck += 1
+            if stuck > 6:
+                break
+        else:
+            stuck = 0
+            last_front = frontier
+        m_d = frontier
+        kind, p, v, run = _best_edit(dec, buf, m_d, mb, dcr, rate, maxW=maxW)
+        m_s = max(0, m_d - 4)
+        base = _probe(dec, buf, int(mb[m_s]), m_s, dcr[m_s], maxW, rate)
+        if kind is not None and run > base + 30 and run > 120:
+            buf = _apply_edit(buf, kind, p, v)
+            n['sub' if kind == 'sub' else 'dele' if kind == 'del' else 'ins'] += 1
+            continue
+        rk = _resync_skip(dec, buf, m_d, mb, dcr, rate,
+                          near=resync_near, full=resync_full, maxW=maxW)
+        if rk is not None:
+            rb, dc, _run = rk
+            segments.append((m_d, rb, dc))
+            n['resync'] += 1
+            continue
+        n['hole'] += 1
+        break
+    _decode_traj(dec, buf, segments, rate)            # 최종 coef 채움
+    return dec.to_rgb(), n, segments
+
+
+def recover_bytes(data: bytes):
+    """JPEG 바이트를 복구해 (rgb_uint8, stats) 반환. 디코드 불가 시 (None, {})."""
+    try:
+        dec = jd.Decoder(data)
+    except Exception:
+        return None, {}
+    rgb, stats, _segs = recover(dec)
+    return rgb, stats
+
+
+def _to_jpeg(rgb: np.ndarray, quality: int) -> bytes:
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.fromarray(rgb).save(buf, format='JPEG', quality=quality)
+    return buf.getvalue()
+
+
+def recover_file(src_path: Path, out_dir: Path, quality: int = 95,
+                 time_budget=90.0, resync_near=300000, resync_full=True):
+    """파일 1개를 복구해 out_dir에 저장. 반환 (out_path|None, action, stats).
+
+    action: RECOVERED | CLEAN | SKIP_UNDECODABLE.
+    time_budget/resync_near/resync_full로 철저함↔속도 조절(→ recover 참조).
+    """
+    data = src_path.read_bytes()
+    try:
+        dec = jd.Decoder(data)
+    except Exception:
+        return None, 'SKIP_UNDECODABLE', {}
+
+    dec.decode_full()
+    before = gray_fraction(dec.to_rgb())
+    rgb, stats, _segs = recover(dec, time_budget=time_budget,
+                                resync_near=resync_near, resync_full=resync_full)
+    after = gray_fraction(rgb)
+    ops = stats['sub'] + stats['dele'] + stats['ins'] + stats['resync']
+    info = {
+        'gray_before': before, 'gray_after': after, 'ops': ops,
+        'width': dec.h.width, 'height': dec.h.height, **stats,
+    }
+    if ops == 0 and before < 0.02:
+        return None, 'CLEAN', info
+    out_path = out_dir / (src_path.stem + '.jpg')
+    out_path.write_bytes(_to_jpeg(rgb, quality))
+    return out_path, 'RECOVERED', info

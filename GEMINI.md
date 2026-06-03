@@ -17,7 +17,7 @@ ddrescue 등으로 복구한 손상된 디스크 이미지(`.img`)에서 JPEG/AV
 | 파일 | 역할 |
 |------|------|
 | `carve.py` | 디스크 이미지에서 JPEG/AVI 시그니처 탐색 및 추출 |
-| `recover.py` | 추출된 JPEG 진단 및 복구 전략 적용 |
-| `carver/` | 스캐너, 추출기, 진단, 복구 로직 모듈 |
+| `recover.py` | 추출된 손상 JPEG를 resync 엔진으로 복구 (병렬 `-j`) |
+| `carver/` | 스캐너·추출기(카빙) + 비트단위 JPEG 디코더·resync 복구 엔진 모듈 |
 | `docs/specs/` | 프로그램 단위 동작 명세 |
 | `docs/adr/` | 비자명한 기술 결정 기록 |
