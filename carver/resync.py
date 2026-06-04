@@ -234,16 +234,20 @@ def _to_jpeg(rgb: np.ndarray, quality: int) -> bytes:
 
 def recover_file(src_path: Path, out_dir: Path, quality: int = 95,
                  time_budget=90.0, resync_near=300000, resync_full=True):
-    """파일 1개를 복구해 out_dir에 저장. 반환 (out_path|None, action, stats).
+    """파일 1개를 복구해 out_dir에 저장. 반환 (out_path, action, stats).
 
     action: RECOVERED | CLEAN | SKIP_UNDECODABLE.
+    모든 경우 out_path는 실제 경로다(None 반환 없음).
     time_budget/resync_near/resync_full로 철저함↔속도 조절(→ recover 참조).
     """
     data = src_path.read_bytes()
     try:
         dec = jd.Decoder(data)
     except Exception:
-        return None, 'SKIP_UNDECODABLE', {}
+        skip_path = out_dir / 'skip_undecodable' / (src_path.stem + '.jpg')
+        skip_path.parent.mkdir(parents=True, exist_ok=True)
+        skip_path.write_bytes(data)
+        return skip_path, 'SKIP_UNDECODABLE', {}
 
     dec.decode_full()
     before = gray_fraction(dec.to_rgb())
@@ -256,7 +260,11 @@ def recover_file(src_path: Path, out_dir: Path, quality: int = 95,
         'width': dec.h.width, 'height': dec.h.height, **stats,
     }
     if ops == 0 and before < 0.02:
-        return None, 'CLEAN', info
-    out_path = out_dir / (src_path.stem + '.jpg')
+        clean_path = out_dir / 'clean' / (src_path.stem + '.jpg')
+        clean_path.parent.mkdir(parents=True, exist_ok=True)
+        clean_path.write_bytes(data)
+        return clean_path, 'CLEAN', info
+    out_path = out_dir / 'recovered' / (src_path.stem + '.jpg')
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(_to_jpeg(rgb, quality))
     return out_path, 'RECOVERED', info

@@ -21,6 +21,12 @@ def _work(path: Path, out_dir: Path, quality: int, time_budget, near: int, full:
             time_budget=time_budget, resync_near=near, resync_full=full)
         return path.name, action, info, None
     except Exception as e:  # noqa: BLE001 — 배치 견고성 위해 모든 예외 포착
+        try:
+            err_path = out_dir / 'error' / path.name
+            err_path.parent.mkdir(parents=True, exist_ok=True)
+            err_path.write_bytes(path.read_bytes())
+        except Exception:  # noqa: BLE001 — 복사 실패해도 분류·기록은 유지
+            pass
         return path.name, 'ERROR', {}, str(e)
 
 
@@ -58,6 +64,8 @@ def main() -> None:
     out_dir = (Path(args.output) if args.output
                else in_dir.parent / (in_dir.name + '_recovered'))
     out_dir.mkdir(parents=True, exist_ok=True)
+    for sub in ('recovered', 'clean', 'skip_undecodable', 'error'):
+        (out_dir / sub).mkdir(exist_ok=True)
 
     jpeg_files = sorted(in_dir.glob('*.jpg'))
     if not jpeg_files:

@@ -63,7 +63,12 @@ output/
 ├── jpeg_thumbnails/    # 내장 썸네일 (--save-thumbnails 사용 시)
 ├── avi/                # 추출된 AVI 파일 (0x{오프셋}.avi)
 ├── errors.log          # 추출 실패 오프셋 및 오류 내역
-└── jpeg_recovered/     # 복구된 JPEG 및 report.csv
+└── jpeg_recovered/     # recover.py 출력
+    ├── report.csv          # 전체 복구 결과 (4종 분류 모두 기록)
+    ├── recovered/          # 복구본 (재인코딩 JPEG)
+    ├── clean/              # 손상 없던 원본 복사
+    ├── skip_undecodable/   # 디코드 실패 원본 복사
+    └── error/              # 워커 예외 원본 복사
 ```
 
 파일명의 16진수 오프셋은 디스크 이미지 내 원본 위치를 나타낸다.

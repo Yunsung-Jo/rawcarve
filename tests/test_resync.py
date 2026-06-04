@@ -101,3 +101,36 @@ def test_recover_file_roundtrip(tmp_path):
         assert out.exists()
         Image.open(out).load()                       # 유효 JPEG
         assert 'gray_before' in info and 'gray_after' in info
+
+
+def test_recover_file_routes_recovered_subdir(tmp_path):
+    """RECOVERED 결과는 out_dir/recovered/ 아래에 저장된다."""
+    src = tmp_path / '0xDEADBEEF.jpg'
+    src.write_bytes(corrupt_entropy(encode(textured_image()), n_bytes=32, seed=99))
+    out, action, info = resync.recover_file(src, tmp_path)
+    assert action == 'RECOVERED'
+    assert out.parent == tmp_path / 'recovered'
+    assert out.exists()
+    Image.open(out).load()                       # 유효 JPEG
+
+
+def test_recover_file_clean_copies_original(tmp_path):
+    """손상 없는 JPEG는 clean/ 폴더에 원본 바이트 그대로 복사된다."""
+    src = tmp_path / '0xCAFEBABE.jpg'
+    raw = encode(textured_image())
+    src.write_bytes(raw)
+    out, action, info = resync.recover_file(src, tmp_path)
+    assert action == 'CLEAN'
+    assert out.parent == tmp_path / 'clean'
+    assert out.read_bytes() == raw               # 원본 바이트 동일
+
+
+def test_recover_file_skip_copies_original(tmp_path):
+    """디코드 불가 입력은 skip_undecodable/ 폴더에 원본 바이트 그대로 복사된다."""
+    src = tmp_path / '0xFEEDFACE.jpg'
+    raw = b'\xff\xd8 not a decodable jpeg \xff\xd9'
+    src.write_bytes(raw)
+    out, action, info = resync.recover_file(src, tmp_path)
+    assert action == 'SKIP_UNDECODABLE'
+    assert out.parent == tmp_path / 'skip_undecodable'
+    assert out.read_bytes() == raw
