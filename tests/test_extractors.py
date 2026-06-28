@@ -113,6 +113,53 @@ def test_jpeg_end_scan_data_with_rst():
     assert end == len(data)
 
 
+def test_jpeg_end_skips_fake_eoi_in_entropy():
+    """엔트로피 중 stuffing이 깨져 생긴 가짜 FF D9를 건너뛰고 진짜 EOI를 찾는다."""
+    sos_seg = make_app_segment(0xDA, b'\x01\x01\x00\x00\x3f\x00')
+    fake_eoi = b'\xff\xd9'
+    entropy = b'\xff\x00' * 100            # 직후 stuffing 100% = 엔트로피 연속(가짜)
+    real_eoi = b'\xff\xd9'
+    padding = b'\x00' * 200                # 직후 stuffing 0% = 진짜 EOI
+    scan = b'\x10\x20' + fake_eoi + entropy + real_eoi + padding
+    data = b'\xff\xd8' + sos_seg + scan
+    end, complete = jpeg_end(data, 0)
+    assert complete is True
+    expected = len(b'\xff\xd8' + sos_seg + b'\x10\x20' + fake_eoi + entropy + real_eoi)
+    assert end == expected
+
+
+def test_jpeg_end_genuine_eoi_followed_by_padding():
+    """EOI 직후가 패딩(낮은 stuffing)이면 첫 EOI를 그대로 진짜로 채택한다."""
+    sos_seg = make_app_segment(0xDA, b'\x01\x01\x00\x00\x3f\x00')
+    scan = b'\x10\x20\x30' + b'\xff\xd9' + b'\x00' * 300
+    data = b'\xff\xd8' + sos_seg + scan
+    end, complete = jpeg_end(data, 0)
+    assert complete is True
+    assert end == len(b'\xff\xd8' + sos_seg + b'\x10\x20\x30' + b'\xff\xd9')
+
+
+def test_jpeg_end_fake_eoi_until_next_sig_falls_back():
+    """진짜 EOI 없이 가짜만 이어지면 next_sig 상한에서 fallback한다."""
+    sos_seg = make_app_segment(0xDA, b'\x01\x01\x00\x00\x3f\x00')
+    fake_eoi = b'\xff\xd9'
+    entropy = b'\xff\x00' * 100
+    scan = b'\x10\x20' + fake_eoi + entropy * 3   # 진짜 EOI 없음(전부 엔트로피 연속)
+    data = b'\xff\xd8' + sos_seg + scan
+    next_sig = len(data)
+    end, complete = jpeg_end(data, 0, next_sig_offset=next_sig)
+    assert complete is False
+    assert end == next_sig
+
+
+def test_stuffing_ratio_distinguishes_entropy_from_padding():
+    """_stuffing_ratio: 엔트로피(높음) vs 패딩/헤더(낮음)을 구분한다."""
+    from carver.extractors import _stuffing_ratio
+    assert _stuffing_ratio(b'\xff\x00' * 50) == 1.0           # 전부 stuffing
+    assert _stuffing_ratio(b'\xff\xd0\xff\xd7' * 20) == 1.0   # 전부 RST
+    assert _stuffing_ratio(b'\x00' * 100) == 0.0              # FF 없음(패딩)
+    assert _stuffing_ratio(b'\xff\xe0\xff\xe1' * 20) == 0.0   # FF 다음 APPn(헤더)
+
+
 # ── avi_end 테스트 ───────────────────────────────────────────
 
 def make_avi(chunk_size: int | None = None, extra: bytes = b'') -> bytes:

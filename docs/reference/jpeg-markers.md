@@ -3,7 +3,7 @@
 - **출처:** ITU-T T.81 (1992) — https://www.w3.org/Graphics/JPEG/itu-t81.pdf;
   Wikipedia "JPEG § Syntax and structure" — https://en.wikipedia.org/wiki/JPEG#Syntax_and_structure;
   Wikibooks "JPEG – Idea and Practice/The header part" — https://en.wikibooks.org/wiki/JPEG_-_Idea_and_Practice/The_header_part
-- **최종 수정:** 2026-05-28
+- **최종 수정:** 2026-06-29
 
 ---
 
@@ -68,6 +68,11 @@ SOS 세그먼트 직후 스캔 데이터가 이어진다.
 대신 비트 정렬이 어긋나(디싱크) 깨진 출력이 된다. 원인·복구는
 [JPEG 엔트로피 코딩과 디싱크 원리](jpeg-entropy-coding.md)와 `carver/resync.py` 참조.
 
+**가짜 EOI:** 반대로 손상이 stuffing(`FF`→`FF 00`)을 깨 엔트로피 중간에 `FF D9`를 만들면,
+카버가 이를 진짜 EOI로 오인해 파일을 일찍 자를 수 있다(누락 데이터 발생). 진짜 EOI는 직후가
+다른 것(다음 파일 헤더·패딩 → 저엔트로피)이고, 가짜는 직후가 엔트로피 연속(`FF` 다음 `00`/RST
+비율이 높음)이라는 차이로 구분한다. 근거: [ADR 0002](../adr/0002-carve-eoi-validation.md).
+
 ## 4. SOF 세그먼트 레이아웃 (SOF0 기준)
 
 ```
@@ -101,3 +106,4 @@ FF D8 FF
 
 - 디스크 이미지 스캔 시 3바이트 시퀀스 `FF D8 FF`를 탐색한다.
 - `FF D8`만으로는 오탐 가능성이 있어 세 번째 바이트 `FF`(다음 세그먼트 시작)까지 포함한다.
+- **EXIF 썸네일 주의:** APP1(`FF E1`) Exif 세그먼트 안에는 축소판 **썸네일 JPEG**가 통째로 내장될 수 있다(`FF D8 FF … FF D9`). 따라서 한 파일의 **엔트로피 시작(SOS) 이전 헤더 안에서도 `FF D8 FF`가 나타난다**(실측: 메인 SOI로부터 +844, +41970 등). 카버는 이를 별도 파일로 오인하면 안 된다 — 메인 파일 범위 안의 시그니처는 임베디드로 처리하고([spec 0001-carve](../specs/0001-carve.md) 엣지 케이스), 파일 끝(다음 파일 경계)을 찾을 때는 엔트로피 시작 **이후**의 `FF D8 FF E0–EF`만 다음 파일 헤더로 본다(`extractors.py::_next_header`).
