@@ -170,14 +170,17 @@ def _peek16(buf, nbits, bitpos):
 
 @njit(cache=True)
 def _recv_extend(buf, nbits, bitpos, s):
-    """s비트를 읽어 JPEG 부호확장한 값과 새 bitpos를 반환."""
-    val = 0
-    for _ in range(s):
-        byte = bitpos >> 3
-        off = bitpos & 7
-        bit = (buf[byte] >> (7 - off)) & 1 if byte < buf.size else 0
-        val = (val << 1) | bit
-        bitpos += 1
+    """s비트를 읽어 JPEG 부호확장한 값과 새 bitpos를 반환.
+    s비트를 1개씩 돌지 않고 4바이트를 모아 한 번에 추출(off+s<=7+15<=22<32 보장)."""
+    byte = bitpos >> 3
+    off = bitpos & 7
+    b0 = buf[byte] if byte < buf.size else 0
+    b1 = buf[byte + 1] if byte + 1 < buf.size else 0
+    b2 = buf[byte + 2] if byte + 2 < buf.size else 0
+    b3 = buf[byte + 3] if byte + 3 < buf.size else 0
+    acc = (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
+    val = (acc >> (32 - off - s)) & ((1 << s) - 1)
+    bitpos += s
     if val < (1 << (s - 1)):
         val += (-(1 << s)) + 1
     return val, bitpos

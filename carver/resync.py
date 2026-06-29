@@ -105,9 +105,11 @@ def _best_edit(dec, buf, m_d, mb, dcr, rate, back=4, win_lo=16, win_hi=6, maxW=9
             best = ('del', p, -1, r)
             if r >= maxW:
                 return best
-    for p in range(lo, hi + 1):                       # 삽입
+    for p in range(lo, hi + 1):                       # 삽입(위치당 버퍼 1회 생성, 값만 교체)
+        work = np.insert(buf, p, 0)                    # np.insert를 p당 1회로: 무익한 전체복사 제거
         for v in range(256):
-            r = _probe(dec, np.insert(buf, p, v), sb, m_s, sdc, maxW, rate)
+            work[p] = v
+            r = _probe(dec, work, sb, m_s, sdc, maxW, rate)
             if r > best[3]:
                 best = ('ins', p, v, r)
                 if r >= maxW:

@@ -6,6 +6,7 @@
 |------|------|----------|------|
 | [0001](0001-resync-recovery.md) | 손상 JPEG 복구를 자작 비트 디코더 + 바이트 오라클/resync로 수행 | 중화+강제디코딩 대신 비트 단위 디코더로 디싱크 지점을 짚고 바이트 편집/재동기로 정렬 복원 | 2026-06-03 |
 | [0002](0002-carve-eoi-validation.md) | carve의 가짜 EOI 오인을 EOI-직후 엔트로피 검사로 방지 | 첫 `FF D9`에서 끝내지 않고 직후 stuffing 비율로 가짜 EOI를 건너뛰어, 누락됐던 데이터를 추출 | 2026-06-28 |
+| [0003](0003-recover-perf-optimization.md) | recover 핫패스를 무손실로 최적화 (GPU·품질 trade-off 배제) | 삽입 후보의 np.insert 전체복사 제거 + _recv_extend 일괄추출. 출력 비트 동일, 실전 80분→9.7분(8.2배) | 2026-06-29 |
 
 ## Deprecated / Superseded
 

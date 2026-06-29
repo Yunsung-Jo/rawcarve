@@ -9,3 +9,4 @@
 | 2026-06-03 | [JPEG 회색·깨짐의 디싱크 복구](2026-06-03-jpeg-gray-desync-recovery.md) | 회색/깨짐 원인을 바이트 단위로 규명 → bit-level 디코더 + 바이트 오라클/resync 복구에 도달하기까지 |
 | 2026-06-29 | [회색 주원인 규명: carve 가짜 EOI](2026-06-29-carve-eoi-discovery.md) | 회색 잔존을 resync로 짜내려다 carve 가짜 EOI 조기종료(추출 누락)임을 규명. 막다른 길(깊은탐색·rate강화·통째로추출·임계튜닝 기각) → stuffing 휴리스틱(ADR0002) |
 | 2026-06-29 | [DC 리셋과 비트폭식 한계](2026-06-29-resync-limit.md) | carve 정상 추출본의 절반 회색 원인 → resync의 DC 캐리·비트폭식 두 한계 확인(레버② 과제). DC=0 리셋 시 gray 0.461→0.274이나 색 캐스트 |
+| 2026-06-29 | [recover 성능 병목 프로파일링](2026-06-29-recover-perf-profiling.md) | recover 1시간+의 주원인은 _best_edit의 np.insert 전체복사(시간 68%)·CPU 8%↔0%는 대역폭 포화. 무손실 제거+_recv_extend 일괄추출 → 실전 8.2배(80분→9.7분). 막다른 길(njit 융합·90초 budget 비교·GPU·비트버퍼 기각) |
