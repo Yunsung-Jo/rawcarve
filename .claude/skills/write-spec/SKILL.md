@@ -14,12 +14,15 @@ description: Use when documenting or updating how a program/tool behaves in docs
 
 구조(절 구성)는 `docs/specs/0000-template.md`를 따른다. 이 스킬은 작성 품질을 다룬다.
 
-## When to Use
+## 언제 사용하나
 
 - 새 프로그램(carve.py·recover.py 같은 CLI 도구 등)을 추가했을 때
 - 코드 변경으로 프로그램의 **관찰 가능한 동작**(인터페이스·출력·파이프라인·엣지 케이스)이 바뀌어
   기존 spec을 갱신해야 할 때
-- `finishing-a-development-branch` 전 영향받은 spec을 갱신할 때 (CLAUDE.md)
+- **리파인 패스(main `--squash` 머지 직전)**에 영향받은 spec을 갱신할 때
+
+experiment-loop 워크플로에서 spec은 **루프 중이 아니라 작업이 끝난 뒤(전체 적용으로 동작이 출하된 뒤)**
+갱신한다 — 동작이 확정돼야 기술할 수 있다.
 
 ## 핵심 원칙
 
@@ -81,7 +84,7 @@ spec은 **현재 동작**을 반영한다(스냅샷이 아니다). 코드가 관
 - [ ] 포맷 지식을 인라인하지 않고 reference로 링크했나?
 - [ ] 산문 절에 의인화·가치어("은폐한다", "정직성")가 없나?
 
-## Common Mistakes
+## 자주 하는 실수
 
 | 실수 | 수정 |
 |------|------|

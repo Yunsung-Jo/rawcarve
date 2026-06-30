@@ -23,10 +23,10 @@ description: Use after writing or editing any docs/ document (spec, ADR, report,
 핵심 구분: 작성 자가점검은 "갖췄나"의 **수동 체크**다. 이 스킬은 "직접 다시 해봤나"의
 **능동 검증**이다.
 
-## When to Use
+## 언제 사용하나
 
 - `write-*`로 문서를 작성·수정한 **직후** (자가점검과 별개로 한 번 더)
-- 커밋·머지(`finishing-a-development-branch`) **전**, 여러 문서를 함께 점검할 때
+- 커밋·머지(**리파인 패스 — main `--squash` 직전**) **전**, 여러 문서를 함께 점검할 때
 - **적용 범위:** 수치·코드 참조·검증 결과·링크를 건드린 변경. 오타·표현 한 줄 수정에 7원칙
   풀패스는 과하다.
 
@@ -89,7 +89,9 @@ description: Use after writing or editing any docs/ document (spec, ADR, report,
   어긋나지 않는지(drift) 대조 — 어긋난 spec은 없느니만 못하다.
 - **report:** 비기술 독자 기준으로 미정의 약어·내부 식별자를 훑고; **민감정보(개인 사진 내용)
   노출·블러 적용**을 확인.
-- **investigation:** "기각된 가설" 절이 비지 않았는지; 스냅샷 불변(코드 drift로 갱신하지 않음) 준수.
+- **investigation:** "기각된 가설" 절이 비지 않았는지; 각 단계가 5요소(가설/실험/예측/증거/판단)를
+  갖췄고 예측이 증거보다 먼저 적혔는지; **몽타주·이미지의 시각적 내용 묘사가 없는지**(지표·결함
+  패턴만 — 있으면 삭제); 스냅샷 불변(코드 drift로 갱신하지 않음) 준수.
 - **ADR:** 각 대안에 정량 기각 이유가 있는지; 대체 시 기존 ADR 상태가 `Superseded`로 바뀌었는지.
 - **reference:** 인용한 포맷 사실(매직바이트·청크 구조·RFC 조항)이 출처와 맞는지 표본 대조.
 - **공통 문체:** [../shared/doc-style.md](../shared/doc-style.md) 위반(의인화·감정어·과정 포장
@@ -118,7 +120,7 @@ description: Use after writing or editing any docs/ document (spec, ADR, report,
       ADR 대안/Superseded, reference 사실 대조)을 했나?
 - [ ] 수정으로 바뀐 수치를 인용하는 다른 문서까지 전파했나?
 
-## Common Mistakes
+## 자주 하는 실수
 
 | 실수 | 수정 |
 |------|------|

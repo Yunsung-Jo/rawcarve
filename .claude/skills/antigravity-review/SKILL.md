@@ -1,6 +1,6 @@
 ---
 name: antigravity-review
-description: Use when reviewing implementation plans, specs, ADRs, or code changes — triggers at writing-plans completion, after spec/ADR authoring, or before finishing-a-development-branch
+description: Use when reviewing implementation plans, specs, ADRs, or code changes — triggers after spec/ADR authoring, when designing a new recovery strategy, on parser/extractor logic changes, or at the refinement pass right before the squash-merge to main
 ---
 
 # Antigravity 리뷰
@@ -13,9 +13,9 @@ description: Use when reviewing implementation plans, specs, ADRs, or code chang
 
 | 트리거 | 리뷰 대상 |
 |--------|----------|
-| `writing-plans` 완료 후 | 계획의 논리적 빈틈, 빠진 엣지 케이스 |
+| 실험 루프의 가설·접근 설계 시 | 계획의 논리적 빈틈, 빠진 엣지 케이스 |
 | spec/ADR 작성 후 | 완결성, 모호한 정의, 대안 검토 누락 |
-| `finishing-a-development-branch` 전 | 코드 정확성, 설계 문제 |
+| 리파인 패스(main `--squash` 머지 직전) | 코드 정확성, 설계 문제 |
 | 새 복구 전략 설계 시 | 전략의 견고성, 손상 패턴 커버리지 |
 | 파서/추출기 로직 변경 시 | 바이너리 포맷 처리 정확성 |
 
