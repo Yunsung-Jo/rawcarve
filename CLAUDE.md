@@ -12,7 +12,9 @@ JPEG 이미지와 AVI 영상 파일을 추출하고, 손상된 JPEG를 복구하
   (스쿼시 머지의 최종 커밋은 main 위에서 일어나는 *승인된 예외*다 — 규칙은 피처 작업의 직접 커밋을 막는 것이다.)
 - 브랜치명: `<타입>/<짧은-설명>` (예: `feat/avi-recovery`, `fix/jpeg-scan`)
 - 로컬 머지 시 항상 `--squash` 플래그를 사용한다.
-  (`git merge --squash <branch>` → 커밋 → `git branch -d <branch>`)
+  (`git merge --squash <branch>` → 커밋 → `git branch -D <branch>`)
+  스쿼시 머지는 git이 브랜치를 머지됨으로 기록하지 않아 `-d`가 항상 거부한다. 머지 커밋이 main에
+  올라온 것을 확인한 뒤 `-D`로 삭제한다.
 
 ## 작업 워크플로
 
