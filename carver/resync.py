@@ -38,6 +38,22 @@ def gray_fraction(rgb: np.ndarray) -> float:
     return float((achroma & flat).mean())
 
 
+def undecoded_fraction(rgb: np.ndarray) -> float:
+    """디코더가 채우지 못한 미복구 회색(RGB≈128 + 평탄) 픽셀 비율.
+    gray_fraction과 달리 재동기된 무채색(Cb/Cr DC=0) 콘텐츠를 회색으로 세지 않으므로,
+    DC=0 리셋 복구의 '진짜' 복구율을 잰다(gray_fraction은 무채색을 회색으로 과다 집계)."""
+    a = rgb.astype(np.int16)
+    h, w, _ = a.shape
+    if h == 0 or w == 0:
+        return 1.0
+    r, g, b = a[:, :, 0], a[:, :, 1], a[:, :, 2]
+    near = (np.abs(r - 128) < 6) & (np.abs(g - 128) < 6) & (np.abs(b - 128) < 6)
+    flat = np.ones((h, w), bool)
+    flat[:, :-1] &= np.abs(np.diff(a, axis=1)).sum(2) < 6
+    flat[:-1, :] &= np.abs(np.diff(a, axis=0)).sum(2) < 6
+    return float((near & flat).mean())
+
+
 def _probe(dec, buf, bit, mcu, dc, maxW, rate):
     """(bit, mcu, dc)에서 디코딩이 plausible하게 이어지는 MCU 수(clean run)."""
     return jd.decode_probe(buf, buf.size * 8, int(bit), int(dc[0]), int(dc[1]), int(dc[2]),
@@ -118,40 +134,53 @@ def _best_edit(dec, buf, m_d, mb, dcr, rate, back=4, win_lo=16, win_hi=6, maxW=9
 
 
 def _resync_skip(dec, buf, m_d, mb, dcr, rate, near=300000, full=True, maxW=900):
-    """재개 비트위치를 탐색해 손상 클러스터/구멍을 건너뛴다(DC는 직전값 캐리).
+    """재개 비트위치를 탐색해 손상 클러스터/구멍을 건너뛴다.
     db≈0(masking, 가짜복구)은 거부. 반환 (resume_bit, dc, run) 또는 None.
+
+    각 후보 위치에서 DC 예측을 [직전값 캐리, 전체 0 리셋] 둘 다 시도해 clean run이 긴 쪽을
+    채택한다. 캐리만으로는 재동기 불가한 hole에서, DC=0 리셋이 재개 지점을 살려 복구율을 크게
+    높인다(Cb/Cr DC도 재동기에 기여하므로 Y만이 아닌 전체를 리셋한다). DC=0은 Cb/Cr 절대
+    오프셋을 잃어 무채색 캐스트를 만들지만 — 진짜 복구율(디코드된 영역)에는 영향이 없고 색
+    보정은 별도 과제다(backlog). 제자리 리셋(|db|<24)은 masking이므로 후보에서 제외한다.
 
     near비트 내를 byte 정렬(8비트 간격)로 먼저 훑고, full=True면 못 찾을 때
     남은 스트림 전체를 거칠게(64비트 간격) 훑어 더 먼 구멍도 건너뛴다(철저 모드).
     full=False면 near까지만(빠른 모드) — 손상 심한 파일에서 비용 폭발을 막는다."""
     base = int(mb[m_d]); dc = dcr[m_d].copy(); nbits = buf.size * 8
     floor_bit = int(mb[m_d - 1]) + 1 if m_d > 0 else 0   # 이전 MCU를 침범하지 않는 하한
-    best = (-1, 0)
+    cands = (dc, np.zeros(3, np.int64))               # DC 캐리 / 전체 0 리셋
+    best = (-1, 0, dc)                                # (bit, run, dc)
     limit = min(nbits - base - 64, near)
     db = max(-32, floor_bit - base)                   # 역방향은 이전 MCU 시작까지만
     while db < limit:                                 # 1) 가까운 범위 byte정렬 스캔
-        r = _probe(dec, buf, base + db, m_d, dc, maxW, rate)
-        if r > best[1]:
-            best = (base + db, r)
-        if r >= maxW:
+        if abs(db) >= 24:                             # 제자리(masking) 제외
+            for cd in cands:
+                r = _probe(dec, buf, base + db, m_d, cd, maxW, rate)
+                if r > best[1]:
+                    best = (base + db, r, cd)
+        if best[1] >= maxW:
             break
         db += 8
     if full and best[1] < maxW * 0.8:                 # 2) 남은 전체 거친 스캔(철저 모드)
         db = limit
         while base + db < nbits - 64:
-            r = _probe(dec, buf, base + db, m_d, dc, maxW, rate)
-            if r > best[1]:
-                best = (base + db, r)
-            if r >= maxW:
+            for cd in cands:
+                r = _probe(dec, buf, base + db, m_d, cd, maxW, rate)
+                if r > best[1]:
+                    best = (base + db, r, cd)
+            if best[1] >= maxW:
                 break
             db += 64
     if best[0] >= 0:                                  # 3) 최적 부근 비트정밀 보정
         for rb in range(max(floor_bit, best[0] - 40), best[0] + 8):
-            r = _probe(dec, buf, rb, m_d, dc, maxW, rate)
-            if r > best[1]:
-                best = (rb, r)
+            if abs(rb - base) < 24:
+                continue
+            for cd in cands:
+                r = _probe(dec, buf, rb, m_d, cd, maxW, rate)
+                if r > best[1]:
+                    best = (rb, r, cd)
     if best[1] >= max(250, maxW // 2) and abs(best[0] - base) >= 24:
-        return best[0], dc.copy(), best[1]
+        return best[0], best[2].copy(), best[1]
     return None
 
 
@@ -252,14 +281,21 @@ def recover_file(src_path: Path, out_dir: Path, quality: int = 95,
         return skip_path, 'SKIP_UNDECODABLE', {}
 
     dec.decode_full()
-    before = gray_fraction(dec.to_rgb())
+    rgb0 = dec.to_rgb()
+    before = gray_fraction(rgb0)
+    before_undec = undecoded_fraction(rgb0)
+    _t0 = time.monotonic()
     rgb, stats, _segs = recover(dec, time_budget=time_budget,
                                 resync_near=resync_near, resync_full=resync_full)
+    recover_sec = time.monotonic() - _t0
     after = gray_fraction(rgb)
+    after_undec = undecoded_fraction(rgb)
     ops = stats['sub'] + stats['dele'] + stats['ins'] + stats['resync']
     info = {
-        'gray_before': before, 'gray_after': after, 'ops': ops,
-        'width': dec.h.width, 'height': dec.h.height, **stats,
+        'gray_before': before, 'gray_after': after,
+        'undec_before': before_undec, 'undec_after': after_undec,
+        'recover_sec': recover_sec,
+        'ops': ops, 'width': dec.h.width, 'height': dec.h.height, **stats,
     }
     if ops == 0 and before < 0.02:
         clean_path = out_dir / 'clean' / (src_path.stem + '.jpg')

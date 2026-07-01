@@ -1,0 +1,53 @@
+# 0004. hole 잔존 회색을 resync-skip의 DC=0 리셋으로 복구
+
+- **날짜:** 2026-07-01
+- **상태:** Accepted
+
+---
+
+## 배경
+
+resync 엔진(ADR 0001)과 carve 가짜 EOI 수정(ADR 0002) 이후에도, 일부 파일은 복구 후 회색이 크게 남았다. 이 회색은 물리적 소실이 아니라 **재동기 실패**였다.
+
+`_resync_skip`은 손상 클러스터를 건너뛸 재개 비트위치를 탐색할 때, 각 후보 위치의 clean run(재개 후 plausible하게 이어지는 MCU 수)을 최대화하되 **DC 예측값은 직전 세그먼트 값을 그대로 이어받았다(캐리)**. 그런데 baseline JPEG의 DC는 직전 블록과의 *차분*으로만 부호화되므로, 스트림 중간부터 재개하려면 그 지점의 실제 DC 절대값이 필요하다. 캐리된 값은 재동기 지점에서 틀리고, 특히 **Cb/Cr DC가 틀리면 계수 dequant 경계(DC_BOUND=1400)에 걸려 clean run이 짧아진다.**
+
+측정([resync-limit 조사](../investigations/2026-06-29-resync-limit.md)): `0xA1F57000`의 hole 지점에서 DC 캐리는 clean run best=137(수락 임계 450 미달 → hole로 중단)인데, **DC를 0으로 리셋하면 best=900**(측정 상한 도달)으로 재동기에 성공했다. 즉 캐리가 재동기 가능한 지점을 놓치고 있었다.
+
+## 결정
+
+`_resync_skip`이 각 재개 후보 위치에서 DC 예측을 **[직전값 캐리, 전체 0 리셋] 두 후보로 probe해 clean run이 긴 쪽을 채택**한다. 채택한 DC를 세그먼트와 함께 넘겨 이후 디코딩에 쓴다.
+
+- **전체 리셋(Y·Cb·Cr 모두 0)** — Y만 0으로 리셋하고 Cb/Cr을 캐리하는 방식(ymono)은 재동기가 약했다(아래 대안). Cb/Cr DC도 재동기에 기여하므로 전체를 0으로 리셋한다.
+- **masking 차단(`|db| ≥ 24`)** — 재개점이 원래 지점과 거의 같은 비트(24비트 미만)면, 이는 "어긋난 스트림을 DC만 리셋해 그대로 다시 읽는" 가짜 복구(ADR 0001의 masking)다. 캐리는 제자리 clean run이 짧아 무해했으나, DC=0 리셋은 제자리에서도 run을 늘려 masking 위험이 생기므로 스캔 단계에서 `|db| ≥ 24` 위치만 유효 후보로 둔다.
+- **undecoded 지표 병기** — `gray_fraction`은 "무채색+평탄"을 회색으로 세는데, DC=0 리셋은 Cb/Cr을 0(무채색)으로 만들어 **재동기된 콘텐츠를 회색으로 오집계**한다. 진짜 복구율을 재도록 `undecoded_fraction`(RGB≈128인 미복구 회색만)을 추가해 `report.csv`에 `undec_before`/`undec_after`로 병기한다.
+
+## 대안
+
+| 대안 | 기각 이유 |
+|------|----------|
+| DC 캐리만 (기존) | hole에서 재동기 실패로 회색 잔존. `0xA1F57000` 캐리 clean run best=137(임계 450 미달) → hole. 복구본 undec 0.100에 고착(개선 없음). |
+| Y만 0 리셋, Cb/Cr 캐리 (ymono) | 재동기가 zero보다 약하다: `0xB70AC000` gray 0.229 vs zero 0.077, `0xA1F57000` 0.157 vs 0.052. 캐리된 Cb/Cr DC가 틀려 계수 경계에 걸리기 때문. 색 보존은 재동기를 희생한다. |
+| 조건부(캐리로 먼저 재동기, 실패 시에만 zero) | 회귀는 완벽히 막으나 개선도 함께 잃는다(실패 5개 중 3개가 baseline과 동일, `0xB70AC000` resync 9=baseline vs zero 25). recover가 좌→우로 hole을 처리하므로, 앞쪽에서 캐리로 얕게 재동기하면 그 경로를 따라가다 다른 hole에 부딪혀 zero가 안 통한다 — 지역 우선순위로는 전역 최적 재동기를 얻지 못한다. |
+| 재동기 후보를 데이터 소비(skew)로도 채점(폭식 회피) | 5샘플 전부 악화, 회귀 가드까지 회귀(`0xA44AE000` 0.000→0.058). bits 최소 선호가 "우연히 짧게 맞은 나쁜 정렬"을 택해 재동기 품질을 떨어뜨린다. 비트 과소비(skew 급증)는 재개 위치로 고칠 디싱크가 아니라 데이터 특성이다([skew 조사](../investigations/2026-07-01-resync-skew-underconsumption.md)). |
+| DC 캐스트를 피하려 제자리 DC 리셋(masking) 허용 | 어긋난 스트림을 DC만 바꿔 다시 읽는 가짜 복구. 반복 source에서 가짜 콘텐츠 생성. `|db|≥24`로 차단. |
+
+## 결과
+
+**실제 영향**
+- `carver/resync.py::_resync_skip`에 DC 후보 `(캐리, np.zeros(3))`를 추가하고 채택 DC를 반환. `undecoded_fraction`을 추가해 `recover_file`·`report.csv`에 `undec_before`/`undec_after` 병기.
+- 전수(822개, `--time-budget 0`): action 분포 불변(CLEAN 143 / RECOVERED 557 / SKIP 122). **복구본(RECOVERED 557) 진짜 복구율 undec 평균 0.100→0.092** — `gray_after`는 무채색 착시로 거의 불변(baseline 0.156)이나 undec로 보면 개선이 드러난다. 전체 평균 개선폭이 작은 것은 대부분 파일이 이미 잘 복구돼 있고 **회색 잔존 소수 케이스에서 대폭 개선**되기 때문이다(0xB70AC000 undec 0.570→0.058, 0xA1F57000 0.444→0.015). `gray_after` 악화 103개 중 100개는 무채색 착시(undec 불변·감소), 진짜 회귀 3개(0.4%, undec +0.01~0.03, 손상 심한 파일).
+- 상세 과정: [dc-reset 조사](../investigations/2026-07-01-resync-dc-reset.md).
+
+**감수한 트레이드오프**
+- DC=0 리셋은 Cb/Cr의 절대 DC 오프셋을 잃어 **재동기 세그먼트에 무채색/색 캐스트**를 만든다. 단 이는 `gray_fraction` 지표 착시와 육안 색 품질에만 영향을 주고 **진짜 복구율(디코드된 영역)에는 무관**하다 — undecoded로는 zero가 모든 샘플에서 baseline 이상이다.
+- 진짜 회귀 3건은 zero의 전역 공격적 경로가 일부 손상 심한 파일에서 국소적으로 baseline 캐리보다 불리한 사례로, 완벽 복구 불가 영역의 트레이드오프로 수용했다.
+
+**향후 고려사항**
+- 재동기 세그먼트 Cb/Cr 색 캐스트 보정(인접 세그먼트 DC로 offset 추정, 공간 연속성) — 진짜 복구율과 무관한 화질 개선이라 별도 과제(backlog).
+- 비트 과소비/데이터 소진으로 남는 회색은 **데이터 한계**다. 누적 평균 rate(resync-limit)도 국소 skew(skew 조사)도 이를 복구로 바꾸지 못함을 3차례 확인했다.
+
+## 관련 항목
+
+- [ADR 0001](0001-resync-recovery.md) — resync 엔진의 masking 거부 원칙을 이 결정이 계승(DC=0 리셋에도 `|db|≥24`로 제자리 masking을 차단). ADR 0001의 "색 캐스트·밝기 밴드 미해결"은 여전히 유효하며, 이 ADR은 그중 **회색(재동기 실패)만** 해결한다.
+- 영향받은 스펙: [recover.py](../specs/0002-recover.md)
+- 분석 과정: [dc-reset 조사](../investigations/2026-07-01-resync-dc-reset.md), [skew·회색 원인 조사](../investigations/2026-07-01-resync-skew-underconsumption.md), 선행 [resync-limit 조사](../investigations/2026-06-29-resync-limit.md)

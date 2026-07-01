@@ -5,6 +5,7 @@
 - **결론 문서:** [ADR 0001 resync 복구](../adr/0001-resync-recovery.md)(색 캐스트·밀림 미해결 항목), [ADR 0002 carve EOI 검증](../adr/0002-carve-eoi-validation.md), [보고서 2026-06-29](../reports/2026-06-29-carve-eoi-recovery.md)
 
 > resync 엔진은 이 조사 시점에 변경하지 않았다(현 브랜치는 carve 수정 범위). 아래는 다음 작업이 이어갈 수 있도록 남기는 스냅샷이다.
+> **후속(대체):** 두 한계는 이후 해결·규명됐다 — ① DC 캐리는 [DC=0 리셋 조사](2026-07-01-resync-dc-reset.md)로 복구([ADR 0004](../adr/0004-resync-dc-reset-recovery.md)), ② 비트 과소비는 [skew 조사](2026-07-01-resync-skew-underconsumption.md)에서 **데이터 한계**로 규명(재동기로 복구 불가).
 
 ---
 

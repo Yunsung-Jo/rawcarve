@@ -74,6 +74,7 @@ def main() -> None:
 
     fieldnames = [
         'filename', 'action', 'gray_before', 'gray_after',
+        'undec_before', 'undec_after', 'recover_sec',
         'ops', 'sub', 'del', 'ins', 'resync', 'hole', 'image_size',
     ]
     counts: dict[str, int] = {}
@@ -88,6 +89,9 @@ def main() -> None:
         if info:
             row['gray_before'] = f"{info['gray_before']:.3f}"
             row['gray_after'] = f"{info['gray_after']:.3f}"
+            row['undec_before'] = f"{info['undec_before']:.3f}"
+            row['undec_after'] = f"{info['undec_after']:.3f}"
+            row['recover_sec'] = f"{info['recover_sec']:.2f}"
             row['ops'] = info['ops']
             row['sub'] = info['sub']
             row['del'] = info['dele']

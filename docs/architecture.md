@@ -30,7 +30,7 @@ rawcarve/
 | `carver/scanner.py` | 디스크 이미지에서 파일 시그니처 탐색 |
 | `carver/extractors.py` | 탐색 결과로부터 JPEG/AVI 파일 경계 계산. JPEG는 가짜 EOI를 건너뛰어 진짜 끝을 찾는다([ADR 0002](adr/0002-carve-eoi-validation.md)) |
 | `carver/jpegdecode.py` | 비트 단위 제어가 가능한 baseline JPEG 디코더(numba). 임의 시작 비트위치/DC에서 재개, 디싱크 탐지 |
-| `carver/resync.py` | 바이트 오라클(치환/삭제/삽입) + 세그먼트 resync로 디싱크를 복원하는 복구 엔진 |
+| `carver/resync.py` | 바이트 오라클(치환/삭제/삽입) + 세그먼트 resync로 디싱크를 복원하는 복구 엔진. 재동기 시 DC 캐리/0 리셋을 함께 시도해 hole을 복구한다([ADR 0004](adr/0004-resync-dc-reset-recovery.md)) |
 
 ## 복구 파이프라인 (recover.py)
 
