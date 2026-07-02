@@ -7,6 +7,9 @@
 - **포맷 사실**은 여기가 아니라 `reference/`에, **현재 목표 자체를 다시 잡게 만드는 발견**은 현재 조사 기록에 적는다.
 - 2026-07-02 발견 세션 2회로 항목이 늘어, 의존성·영향 분석에 따라 **작업 순서(W1~W6)**로 재편했다(같은 날 정리).
   근거 실험은 [사각지대 조사](investigations/2026-07-02-recovery-tool-blindspots.md)·[blocky·밀림 조사](investigations/2026-07-02-blocky-shift-dc-offset.md).
+- 아래에서 쓰는 엔진 용어(frontier·clean run·probe·masking·세그먼트·hole)의 정의는
+  [recover 스펙 §복구 원리](specs/0002-recover.md#복구-원리-알고리즘), 포맷 불변량(DC 물리 범위·조밀
+  코드 공간)은 [JPEG 엔트로피 코딩 레퍼런스](reference/jpeg-entropy-coding.md) 참조.
 
 ## 작업 순서 요약
 
