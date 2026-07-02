@@ -64,7 +64,7 @@ def main() -> None:
     out_dir = (Path(args.output) if args.output
                else in_dir.parent / (in_dir.name + '_recovered'))
     out_dir.mkdir(parents=True, exist_ok=True)
-    for sub in ('recovered', 'clean', 'skip_undecodable', 'error'):
+    for sub in ('recovered', 'clean', 'failed', 'skip_undecodable', 'error'):
         (out_dir / sub).mkdir(exist_ok=True)
 
     jpeg_files = sorted(in_dir.glob('*.jpg'))
@@ -74,10 +74,11 @@ def main() -> None:
 
     fieldnames = [
         'filename', 'action', 'gray_before', 'gray_after',
-        'undec_before', 'undec_after', 'recover_sec',
-        'ops', 'sub', 'del', 'ins', 'resync', 'hole', 'image_size',
+        'undec_before', 'undec_after', 'undec_delta', 'worse', 'recover_sec',
+        'ops', 'sub', 'del', 'ins', 'resync', 'hole', 'mcus', 'image_size',
     ]
     counts: dict[str, int] = {}
+    stat_rows: list[tuple[str, int, float, float]] = []  # (action, mcus, undec_before, undec_after)
     jobs = args.jobs if args.jobs > 0 else (os.cpu_count() or 4)
     work = partial(_work, out_dir=out_dir, quality=args.quality,
                    time_budget=budget, near=near, full=full)
@@ -87,10 +88,13 @@ def main() -> None:
         row['filename'] = name
         row['action'] = action
         if info:
+            delta = info['undec_after'] - info['undec_before']
             row['gray_before'] = f"{info['gray_before']:.3f}"
             row['gray_after'] = f"{info['gray_after']:.3f}"
             row['undec_before'] = f"{info['undec_before']:.3f}"
             row['undec_after'] = f"{info['undec_after']:.3f}"
+            row['undec_delta'] = f"{delta:+.3f}"
+            row['worse'] = '1' if delta > 0.01 else ''
             row['recover_sec'] = f"{info['recover_sec']:.2f}"
             row['ops'] = info['ops']
             row['sub'] = info['sub']
@@ -98,7 +102,10 @@ def main() -> None:
             row['ins'] = info['ins']
             row['resync'] = info['resync']
             row['hole'] = info['hole']
+            row['mcus'] = info['mcus']
             row['image_size'] = f"{info['width']}x{info['height']}"
+            stat_rows.append((action, info['mcus'],
+                              info['undec_before'], info['undec_after']))
         writer.writerow(row)
         counts[action] = counts.get(action, 0) + 1
         if err:
@@ -122,6 +129,30 @@ def main() -> None:
     print(f"\n완료. 리포트: {out_dir / 'report.csv'}")
     for action, cnt in sorted(counts.items()):
         print(f'  {action}: {cnt}개')
+
+    # 층화 요약 — 악화·크기 대역이 평균에 가려지지 않게 한다 (백로그 W1)
+    rec = [r for r in stat_rows if r[0] == 'RECOVERED']
+    if rec:
+        ub = sum(r[2] for r in rec) / len(rec)
+        ua = sum(r[3] for r in rec) / len(rec)
+        print(f'RECOVERED undec 평균: {ub:.3f} → {ua:.3f}')
+    worse = [(a, m, b, x) for a, m, b, x in stat_rows if x - b > 0.01]
+    print(f'악화(Δundec > +0.01): {len(worse)}개'
+          + (f' — ' + ', '.join(f'{a} {n}개' for a, n in sorted(
+              {a: sum(1 for w in worse if w[0] == a) for a in {w[0] for w in worse}}.items()))
+             if worse else ''))
+    bands = [('<120', 0, 120), ('120-449', 120, 450),
+             ('450-899', 450, 900), ('>=900', 900, 1 << 60)]
+    graded = [r for r in stat_rows if r[0] in ('RECOVERED', 'FAILED')]
+    if graded:
+        print('MCU 대역별 (RECOVERED+FAILED):')
+        for label, lo, hi in bands:
+            grp = [r for r in graded if lo <= r[1] < hi]
+            if not grp:
+                continue
+            mean_ua = sum(r[3] for r in grp) / len(grp)
+            n_bad = sum(1 for r in grp if r[3] > 0.15)
+            print(f'  {label:>8}: {len(grp):4d}개, undec_after 평균 {mean_ua:.3f}, >0.15 {n_bad}개')
 
 
 if __name__ == '__main__':

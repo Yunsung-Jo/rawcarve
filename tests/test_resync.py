@@ -134,3 +134,25 @@ def test_recover_file_skip_copies_original(tmp_path):
     assert action == 'SKIP_UNDECODABLE'
     assert out.parent == tmp_path / 'skip_undecodable'
     assert out.read_bytes() == raw
+
+
+def test_recover_file_failed_preserves_original(tmp_path):
+    """무행동(ops 0·hole≥1) 파일은 failed/에 원본 바이트를 보존한다.
+
+    총 MCU가 수락 임계(편집 120·재동기 450) 미만인 소형 이미지는 어떤 편집·
+    재동기도 수락될 수 없어(2026-07-02 사각지대 조사: 임계 잠금), 디싱크가
+    감지되면 무행동으로 끝난다 — 회색 재인코딩본 대신 원본을 남겨야 한다.
+    절단(EOI 없이 엔트로피 후반 소실)은 코퍼스의 실제 사례이며 버퍼 끝 정지가
+    보장되는 결정적 손상이다."""
+    data = encode(textured_image(64, 64, seed=7))    # 4:2:2 → 32 MCU < 120
+    h = jd.parse_header(data)
+    last_eoi = data.rfind(b'\xff\xd9')
+    trunc = data[:h.scan_start + (last_eoi - h.scan_start) * 7 // 10]  # 후반 30% 절단
+    src = tmp_path / '0xBADD1E00.jpg'
+    src.write_bytes(trunc)
+    out, action, info = resync.recover_file(src, tmp_path, time_budget=15)
+    assert action == 'FAILED'
+    assert out.parent == tmp_path / 'failed'
+    assert out.read_bytes() == trunc                 # 원본 보존
+    assert info['ops'] == 0 and info['hole'] >= 1
+    assert info['mcus'] == 32

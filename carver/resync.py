@@ -267,7 +267,9 @@ def recover_file(src_path: Path, out_dir: Path, quality: int = 95,
                  time_budget=90.0, resync_near=300000, resync_full=True):
     """파일 1개를 복구해 out_dir에 저장. 반환 (out_path, action, stats).
 
-    action: RECOVERED | CLEAN | SKIP_UNDECODABLE.
+    action: RECOVERED | CLEAN | FAILED | SKIP_UNDECODABLE.
+    FAILED = 편집·재동기가 한 번도 수락되지 않고 hole로 종료(무행동) — 재인코딩
+    회색본 대신 원본 바이트를 보존한다(입력보다 나쁜 복구본 저장 방지).
     모든 경우 out_path는 실제 경로다(None 반환 없음).
     time_budget/resync_near/resync_full로 철저함↔속도 조절(→ recover 참조).
     """
@@ -295,13 +297,21 @@ def recover_file(src_path: Path, out_dir: Path, quality: int = 95,
         'gray_before': before, 'gray_after': after,
         'undec_before': before_undec, 'undec_after': after_undec,
         'recover_sec': recover_sec,
-        'ops': ops, 'width': dec.h.width, 'height': dec.h.height, **stats,
+        'ops': ops, 'width': dec.h.width, 'height': dec.h.height,
+        'mcus': dec.mcus_x * dec.mcus_y, **stats,
     }
     if ops == 0 and before < 0.02:
         clean_path = out_dir / 'clean' / (src_path.stem + '.jpg')
         clean_path.parent.mkdir(parents=True, exist_ok=True)
         clean_path.write_bytes(data)
         return clean_path, 'CLEAN', info
+    if ops == 0 and stats['hole'] >= 1:
+        # 무행동: 회색 위주 재인코딩본은 입력 plain 디코드보다 항상 나쁘므로
+        # 원본을 보존해 후속 pass(임계 비례화·헤더 복구)가 재시도할 수 있게 한다
+        failed_path = out_dir / 'failed' / (src_path.stem + '.jpg')
+        failed_path.parent.mkdir(parents=True, exist_ok=True)
+        failed_path.write_bytes(data)
+        return failed_path, 'FAILED', info
     out_path = out_dir / 'recovered' / (src_path.stem + '.jpg')
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(_to_jpeg(rgb, quality))

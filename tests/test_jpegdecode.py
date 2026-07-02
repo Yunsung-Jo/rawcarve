@@ -62,3 +62,25 @@ def test_rejects_non_three_component():
     Image.fromarray(gray, mode='L').save(buf, format='JPEG')
     with pytest.raises(ValueError):
         jd.Decoder(buf.getvalue())
+
+
+def test_rejects_missing_dht():
+    """DHT 소실 파일은 거부한다.
+
+    미검증 시 all-zero LUT로 진행돼 MCU 0에서 무효 코드 → 전량 회색이
+    RECOVERED로 오분류된다(2026-07-02 사각지대 조사: 코퍼스 66건)."""
+    data = encode(smooth_image(), 1)
+    out = bytearray(data[:2])                       # SOI
+    i = 2
+    while i < len(data) - 4:
+        assert data[i] == 0xFF
+        m = data[i + 1]
+        if m == 0xDA:                               # SOS부터는 그대로 복사
+            out += data[i:]
+            break
+        seglen = int.from_bytes(data[i + 2:i + 4], 'big')
+        if m != 0xC4:                               # DHT(FFC4)만 제거
+            out += data[i:i + 2 + seglen]
+        i += 2 + seglen
+    with pytest.raises(ValueError):
+        jd.Decoder(bytes(out))
